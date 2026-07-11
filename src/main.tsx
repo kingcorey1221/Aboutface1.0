@@ -558,6 +558,79 @@ function applyBlendPen(
   layerCtx.restore();
 }
 
+function drawExpressionOverlay(
+  layerCtx: CanvasRenderingContext2D,
+  targetPoints: Point[],
+  performance: FacialPerformance | null,
+) {
+  if (!performance) return;
+
+  const mouth = pointBounds(targetPoints, LIPS);
+  const smile = clamp((performance.mouth.smileLeft + performance.mouth.smileRight) / 2, 0, 1);
+  const mouthOpen = clamp(performance.mouth.mouthOpen * 1.35 - performance.mouth.lipClose * 0.45, 0, 1);
+  const mouthCenter = {
+    x: mouth.minX + mouth.width / 2,
+    y: mouth.minY + mouth.height / 2,
+  };
+
+  if (mouth.width > 0 && mouth.height > 0) {
+    layerCtx.save();
+    layerCtx.filter = "blur(0.6px)";
+    if (mouthOpen > 0.08) {
+      const apertureWidth = mouth.width * (0.42 + smile * 0.42 + performance.mouth.stretchLeft * 0.18 + performance.mouth.stretchRight * 0.18);
+      const apertureHeight = mouth.height * (0.22 + mouthOpen * 1.35);
+      layerCtx.fillStyle = `rgba(22, 10, 8, ${0.62 + mouthOpen * 0.3})`;
+      layerCtx.beginPath();
+      layerCtx.ellipse(mouthCenter.x, mouthCenter.y + mouth.height * 0.05, apertureWidth, apertureHeight, 0, 0, Math.PI * 2);
+      layerCtx.fill();
+
+      if (mouthOpen > 0.34) {
+        layerCtx.fillStyle = `rgba(245, 238, 224, ${Math.min(0.62, mouthOpen * 0.55)})`;
+        layerCtx.beginPath();
+        layerCtx.roundRect(
+          mouthCenter.x - apertureWidth * 0.48,
+          mouthCenter.y - apertureHeight * 0.58,
+          apertureWidth * 0.96,
+          apertureHeight * 0.32,
+          3,
+        );
+        layerCtx.fill();
+      }
+    } else if (smile > 0.12) {
+      layerCtx.strokeStyle = `rgba(75, 31, 24, ${0.28 + smile * 0.28})`;
+      layerCtx.lineWidth = Math.max(1, mouth.height * 0.08);
+      layerCtx.beginPath();
+      layerCtx.moveTo(mouth.minX + mouth.width * 0.18, mouthCenter.y);
+      layerCtx.quadraticCurveTo(mouthCenter.x, mouthCenter.y + mouth.height * smile * 0.32, mouth.maxX - mouth.width * 0.18, mouthCenter.y);
+      layerCtx.stroke();
+    }
+    layerCtx.restore();
+  }
+
+  [
+    { indexes: LEFT_EYE, blink: performance.eyes.leftBlink },
+    { indexes: RIGHT_EYE, blink: performance.eyes.rightBlink },
+  ].forEach(({ indexes, blink }) => {
+    const eye = pointBounds(targetPoints, indexes);
+    if (eye.width <= 0 || eye.height <= 0 || blink < 0.12) return;
+    layerCtx.save();
+    layerCtx.filter = "blur(1.2px)";
+    layerCtx.fillStyle = `rgba(190, 139, 116, ${Math.min(0.72, blink * 0.7)})`;
+    layerCtx.beginPath();
+    layerCtx.ellipse(
+      eye.minX + eye.width / 2,
+      eye.minY + eye.height / 2,
+      eye.width * 0.58,
+      eye.height * (0.32 + blink * 0.58),
+      0,
+      0,
+      Math.PI * 2,
+    );
+    layerCtx.fill();
+    layerCtx.restore();
+  });
+}
+
 function drawLockedPortrait(
   ctx: CanvasRenderingContext2D,
   video: HTMLVideoElement,
@@ -679,6 +752,7 @@ function drawFaceSwapMesh(
   edgeSoftness: number,
   lightingStrength: number,
   blendPenPoints: BlendPenPoint[],
+  performance: FacialPerformance | null,
 ) {
   if (!photo.mesh) return false;
 
@@ -758,6 +832,8 @@ function drawFaceSwapMesh(
   layerCtx.globalCompositeOperation = "destination-in";
   layerCtx.drawImage(mask, 0, 0);
   layerCtx.restore();
+
+  drawExpressionOverlay(layerCtx, targetPoints, performance);
 
   if (lightingStrength > 0) {
     layerCtx.save();
@@ -1170,6 +1246,7 @@ function App() {
           edgeSoftness,
           lightingStrength,
           blendPenPointsRef.current,
+          smoothedPerformance,
         );
       } else if (selectedPhoto && overlayMode === "portrait" && selectedPhoto.mesh) {
         ctx.restore();
