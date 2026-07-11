@@ -340,16 +340,6 @@ function drawWarpedFaceMesh(
   layerCtx.drawImage(mask, 0, 0);
   layerCtx.restore();
 
-  const featureFade = clamp(edgeSoftness / 22, 0.35, 0.82);
-  layerCtx.save();
-  layerCtx.globalCompositeOperation = "destination-out";
-  layerCtx.filter = `blur(${Math.max(3, edgeSoftness * 0.34)}px)`;
-  layerCtx.fillStyle = `rgba(0, 0, 0, ${featureFade})`;
-  drawClosedLandmarkFill(layerCtx, targetPoints, LEFT_EYE);
-  drawClosedLandmarkFill(layerCtx, targetPoints, RIGHT_EYE);
-  drawClosedLandmarkFill(layerCtx, targetPoints, LIPS);
-  layerCtx.restore();
-
   if (lightingStrength > 0) {
     layerCtx.save();
     layerCtx.globalCompositeOperation = "soft-light";
@@ -418,16 +408,16 @@ function App() {
     memoryMb: null,
   });
   const [facialPerformance, setFacialPerformance] = useState<FacialPerformance | null>(null);
-  const [opacity, setOpacity] = useState(92);
+  const [opacity, setOpacity] = useState(100);
   const [scale, setScale] = useState(109);
   const [offsetY, setOffsetY] = useState(-2);
-  const [edgeSoftness, setEdgeSoftness] = useState(18);
-  const [lightingStrength, setLightingStrength] = useState(42);
+  const [edgeSoftness, setEdgeSoftness] = useState(8);
+  const [lightingStrength, setLightingStrength] = useState(18);
   const [smoothing, setSmoothing] = useState(45);
   const [rotation, setRotation] = useState(true);
   const [mirror, setMirror] = useState(true);
   const [debug, setDebug] = useState(false);
-  const [blendMode, setBlendMode] = useState<BlendMode>("soft-light");
+  const [blendMode, setBlendMode] = useState<BlendMode>("normal");
   const [overlayMode, setOverlayMode] = useState<OverlayMode>("mesh");
   const [error, setError] = useState<string | null>(null);
 
@@ -930,15 +920,15 @@ function App() {
   }, [deleteRecording, stopCamera]);
 
   const resetControls = useCallback(() => {
-    setOpacity(92);
+    setOpacity(100);
     setScale(109);
     setOffsetY(-2);
-    setEdgeSoftness(18);
-    setLightingStrength(42);
+    setEdgeSoftness(8);
+    setLightingStrength(18);
     setRotation(true);
     setMirror(true);
     setDebug(false);
-    setBlendMode("soft-light");
+    setBlendMode("normal");
     setOverlayMode("mesh");
   }, []);
 

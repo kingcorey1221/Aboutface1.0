@@ -1,10 +1,11 @@
 # Android Build
 
-About Face now has a native Android launch path inside the generated Android project.
+About Face now has an independent native Android app under `android/`.
 
 ## What Works
 
-- Launches a Kotlin `ComponentActivity`, not the Capacitor `BridgeActivity`.
+- Launches a Kotlin `ComponentActivity`.
+- Builds without Capacitor, WebView, or copied Vite web assets.
 - Uses Jetpack Compose for the Android UI.
 - Uses CameraX `Preview`.
 - Uses CameraX `ImageAnalysis`.
@@ -44,7 +45,6 @@ The local `android/local.properties` file points Gradle at the SDK. It is intent
 From the repo root:
 
 ```bash
-npm install
 npm run android:build:windows
 ```
 
@@ -77,7 +77,7 @@ On 2026-07-11:
 - `npm run test`: passed
 - `npm run build`: passed
 - `gradlew assembleDebug` with Android Studio JBR Java 21: passed
-- Native Kotlin/Compose/CameraX Android build: passed
+- Independent native Kotlin/Compose/CameraX Android build: passed
 - APK generated at `android/app/build/outputs/apk/debug/app-debug.apk`
 
 ## Supported Android Features Label
