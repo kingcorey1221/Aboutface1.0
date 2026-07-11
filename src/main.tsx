@@ -50,7 +50,7 @@ import { mapBlendshapesToPerformance, smoothPerformance } from "./tracking/Blend
 import "./styles.css";
 
 type BlendMode = "normal" | "multiply" | "screen" | "overlay" | "soft-light";
-type OverlayMode = "mesh" | "flat";
+type OverlayMode = "portrait" | "mesh" | "flat";
 
 type Point = {
   x: number;
@@ -500,6 +500,118 @@ function applyBlendPen(
   layerCtx.restore();
 }
 
+function drawLockedPortrait(
+  ctx: CanvasRenderingContext2D,
+  video: HTMLVideoElement,
+  photo: PhotoAsset,
+  targetPoints: Point[],
+  opacity: number,
+  blendMode: BlendMode,
+  edgeSoftness: number,
+  lightingStrength: number,
+  blendPenPoints: BlendPenPoint[],
+  hairMotion: HairMotion,
+) {
+  if (!photo.mesh) return false;
+
+  const canvas = ctx.canvas;
+  const width = canvas.width;
+  const height = canvas.height;
+  const layer = document.createElement("canvas");
+  const layerCtx = layer.getContext("2d");
+  const mask = document.createElement("canvas");
+  const maskCtx = mask.getContext("2d");
+  if (!layerCtx || !maskCtx) return false;
+
+  layer.width = width;
+  layer.height = height;
+  mask.width = width;
+  mask.height = height;
+
+  const imageWidth = photo.image.naturalWidth || photo.image.width;
+  const imageHeight = photo.image.naturalHeight || photo.image.height;
+  const sourcePoints = photo.mesh.landmarks.map((point) => toPixelPoint(point, imageWidth, imageHeight));
+  const sourceFace = pointBounds(sourcePoints, FACE_OVAL);
+  const targetFace = pointBounds(targetPoints, FACE_OVAL);
+  if (sourceFace.width <= 0 || sourceFace.height <= 0 || targetFace.width <= 0 || targetFace.height <= 0) {
+    return false;
+  }
+
+  const sourceRect = clampRectToImage(
+    {
+      x: sourceFace.minX - sourceFace.width * 0.62,
+      y: sourceFace.minY - sourceFace.height * 1.02,
+      width: sourceFace.width * 2.24,
+      height: sourceFace.height * 2.98,
+    },
+    imageWidth,
+    imageHeight,
+  );
+  const targetRect = {
+    x: targetFace.minX - targetFace.width * 0.62 + hairMotion.x,
+    y: targetFace.minY - targetFace.height * 1 + hairMotion.y,
+    width: targetFace.width * 2.24,
+    height: targetFace.height * 2.92,
+  };
+  const left = targetPoints[234];
+  const right = targetPoints[454];
+  const angle = left && right ? Math.atan2(right.y - left.y, right.x - left.x) + hairMotion.rotation : hairMotion.rotation;
+
+  layerCtx.save();
+  layerCtx.translate(targetRect.x + targetRect.width / 2, targetRect.y + targetRect.height / 2);
+  layerCtx.rotate(angle);
+  layerCtx.drawImage(
+    photo.image,
+    sourceRect.x,
+    sourceRect.y,
+    sourceRect.width,
+    sourceRect.height,
+    -targetRect.width / 2,
+    -targetRect.height / 2,
+    targetRect.width,
+    targetRect.height,
+  );
+  layerCtx.restore();
+
+  maskCtx.save();
+  maskCtx.filter = `blur(${Math.max(10, edgeSoftness * 1.8)}px)`;
+  maskCtx.fillStyle = "#fff";
+  maskCtx.translate(targetRect.x + targetRect.width / 2, targetRect.y + targetRect.height / 2);
+  maskCtx.rotate(angle);
+  maskCtx.beginPath();
+  maskCtx.ellipse(0, 0, targetRect.width / 2, targetRect.height / 2, 0, 0, Math.PI * 2);
+  maskCtx.fill();
+  maskCtx.restore();
+
+  layerCtx.save();
+  layerCtx.globalCompositeOperation = "destination-in";
+  layerCtx.drawImage(mask, 0, 0);
+  layerCtx.restore();
+
+  if (lightingStrength > 0) {
+    layerCtx.save();
+    layerCtx.globalCompositeOperation = "soft-light";
+    layerCtx.globalAlpha = Math.min(0.45, lightingStrength / 140);
+    layerCtx.filter = "grayscale(1) contrast(1.16) brightness(0.98)";
+    layerCtx.drawImage(video, 0, 0, width, height);
+    layerCtx.restore();
+
+    layerCtx.save();
+    layerCtx.globalCompositeOperation = "destination-in";
+    layerCtx.drawImage(mask, 0, 0);
+    layerCtx.restore();
+  }
+
+  applyBlendPen(layerCtx, blendPenPoints);
+
+  ctx.save();
+  ctx.globalAlpha = opacity / 100;
+  ctx.globalCompositeOperation = blendModeToComposite[blendMode];
+  ctx.drawImage(layer, 0, 0);
+  ctx.restore();
+  return true;
+}
+
 function drawWarpedFaceMesh(
   ctx: CanvasRenderingContext2D,
   video: HTMLVideoElement,
@@ -662,7 +774,7 @@ function App() {
   const [mirror, setMirror] = useState(true);
   const [debug, setDebug] = useState(false);
   const [blendMode, setBlendMode] = useState<BlendMode>("normal");
-  const [overlayMode, setOverlayMode] = useState<OverlayMode>("mesh");
+  const [overlayMode, setOverlayMode] = useState<OverlayMode>("portrait");
   const [error, setError] = useState<string | null>(null);
 
   const selectedPhoto = useMemo(
@@ -875,7 +987,21 @@ function App() {
       ctx.save();
       ctx.translate(centerX, centerY);
       ctx.rotate(angle);
-      if (selectedPhoto && overlayMode === "mesh" && selectedPhoto.mesh) {
+      if (selectedPhoto && overlayMode === "portrait" && selectedPhoto.mesh) {
+        ctx.restore();
+        drawLockedPortrait(
+          ctx,
+          video,
+          selectedPhoto,
+          targetPoints,
+          opacity,
+          blendMode,
+          edgeSoftness,
+          lightingStrength,
+          blendPenPointsRef.current,
+          hairSwayRef.current,
+        );
+      } else if (selectedPhoto && overlayMode === "mesh" && selectedPhoto.mesh) {
         ctx.restore();
         drawWarpedFaceMesh(
           ctx,
@@ -1197,7 +1323,7 @@ function App() {
     setMirror(true);
     setDebug(false);
     setBlendMode("normal");
-    setOverlayMode("mesh");
+    setOverlayMode("portrait");
     blendPenPointsRef.current = [];
     blendPenUndoRef.current = [];
     blendPenRedoRef.current = [];
@@ -1503,7 +1629,8 @@ function App() {
         <label className="select-row">
           <span>Overlay mode</span>
           <select value={overlayMode} onChange={(event) => setOverlayMode(event.target.value as OverlayMode)}>
-            <option value="mesh">Mesh warp</option>
+            <option value="portrait">Real photo lock</option>
+            <option value="mesh">Expression mesh - experimental</option>
             <option value="flat">Flat photo</option>
           </select>
         </label>
@@ -1535,7 +1662,7 @@ function App() {
           <Metric label="Smile L/R" value={((facialPerformance?.mouth.smileLeft ?? 0) + (facialPerformance?.mouth.smileRight ?? 0)) / 2} />
           <Metric label="Confidence" value={facialPerformance?.trackingConfidence ?? 0} />
         </div>
-        <div className="note">Renderer is mesh-based: stable motion, blinking, mouth cutouts, edge blend, and lighting match are prioritized over full neural photorealism.</div>
+        <div className="note">Use Real photo lock for the most authentic current output. Expression mesh is experimental and can distort the face until a neural renderer is added.</div>
       </aside>
     </main>
   );
