@@ -28,6 +28,10 @@ flowchart TD
 - Fast Preview canvas renderer.
 - Visible disclosure watermark.
 - Preview and recording.
+- Android native launch path using Kotlin, Compose, and CameraX Preview/ImageAnalysis.
+- Android keep-latest frame strategy with reliable `ImageProxy` closing.
+- Android thermal, battery, camera-active, streaming-active, recording-active, and performance-mode indicators.
+- Android desktop-streaming policy scaffolding with short-lived non-persistent pairing tokens.
 
 ## Prototype Quality
 
@@ -35,6 +39,8 @@ flowchart TD
 - Smoothing is not yet region-specific in the live loop.
 - Target identity preparation does not yet include masks, depth, canonical pose, or embeddings.
 - Mesh preview still renders in `main.tsx`.
+- Android native path currently tracks CameraX frame flow but does not yet run native MediaPipe Face Landmarker inference.
+- Android recording, Sharesheet, MediaProjection, and WebRTC paths are product scaffolds, not completed media pipelines.
 
 ## Not Yet Implemented
 
@@ -46,3 +52,4 @@ flowchart TD
 - Desktop app.
 - Windows virtual camera.
 - macOS camera extension.
+- Android systemwide virtual-camera replacement. This is intentionally unsupported by normal Android app APIs.

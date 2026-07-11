@@ -2,7 +2,14 @@ import type { NormalizedLandmark } from "@mediapipe/tasks-vision";
 
 export type BlendMode = "normal" | "multiply" | "screen" | "overlay" | "soft-light";
 export type OverlayMode = "mesh" | "flat";
-export type AppStep = "welcome" | "upload" | "camera" | "live" | "recording" | "privacy";
+export type AppStep =
+  | "welcome"
+  | "upload"
+  | "camera"
+  | "live"
+  | "recording"
+  | "desktop"
+  | "privacy";
 
 export type Point = {
   x: number;
@@ -152,6 +159,38 @@ export type SmoothingProfile = {
   jaw: number;
   blinks: number;
   gaze: number;
+};
+
+export type DesktopStreamingStatus =
+  | "idle"
+  | "pairing"
+  | "connecting"
+  | "connected"
+  | "reconnecting"
+  | "stopped"
+  | "error";
+
+export type StreamingResolution = "854x480" | "1280x720" | "1920x1080";
+
+export type StreamingFps = 24 | 30;
+
+export type DesktopPairingToken = {
+  token: string;
+  expiresAt: number;
+  createdAt: number;
+  persistent: false;
+};
+
+export type StreamingHealth = {
+  status: DesktopStreamingStatus;
+  connectionState: RTCPeerConnectionState | "not-created";
+  iceState: RTCIceConnectionState | "not-created";
+  bitrateKbps: number | null;
+  framesSent: number | null;
+  droppedFrames: number;
+  resolution: StreamingResolution;
+  fps: StreamingFps;
+  warning: string | null;
 };
 
 export const DEFAULT_SMOOTHING_PROFILE: SmoothingProfile = {

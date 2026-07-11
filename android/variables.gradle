@@ -3,10 +3,14 @@ ext {
     compileSdkVersion = 35
     targetSdkVersion = 35
     androidxActivityVersion = '1.9.2'
+    androidxActivityComposeVersion = '1.9.2'
     androidxAppCompatVersion = '1.7.0'
+    androidxCameraVersion = '1.4.1'
+    androidxComposeBomVersion = '2024.09.03'
     androidxCoordinatorLayoutVersion = '1.2.0'
     androidxCoreVersion = '1.15.0'
     androidxFragmentVersion = '1.8.4'
+    androidxLifecycleRuntimeComposeVersion = '2.8.7'
     coreSplashScreenVersion = '1.0.1'
     androidxWebkitVersion = '1.12.1'
     junitVersion = '4.13.2'
