@@ -699,21 +699,60 @@ function drawFaceSwapMesh(
   const imageWidth = photo.image.naturalWidth || photo.image.width;
   const imageHeight = photo.image.naturalHeight || photo.image.height;
   const sourcePoints = photo.mesh.landmarks.map((point) => toPixelPoint(point, imageWidth, imageHeight));
-  const swapPoints = createIdentityLockedTargetPoints(sourcePoints, targetPoints);
-
-  for (let index = 0; index < photo.mesh.triangles.length; index += 3) {
-    const a = photo.mesh.triangles[index];
-    const b = photo.mesh.triangles[index + 1];
-    const c = photo.mesh.triangles[index + 2];
-    drawTriangleImagePatch(
-      layerCtx,
-      photo.image,
-      [sourcePoints[a], sourcePoints[b], sourcePoints[c]],
-      [swapPoints[a], swapPoints[b], swapPoints[c]],
-    );
+  const sourceFace = pointBounds(sourcePoints, FACE_OVAL);
+  const targetFace = pointBounds(targetPoints, FACE_OVAL);
+  if (sourceFace.width <= 0 || sourceFace.height <= 0 || targetFace.width <= 0 || targetFace.height <= 0) {
+    return false;
   }
 
-  drawGeneratedMask(maskCtx, swapPoints, Math.max(6, edgeSoftness), null);
+  const sourceRect = clampRectToImage(
+    {
+      x: sourceFace.minX - sourceFace.width * 0.2,
+      y: sourceFace.minY - sourceFace.height * 0.24,
+      width: sourceFace.width * 1.4,
+      height: sourceFace.height * 1.46,
+    },
+    imageWidth,
+    imageHeight,
+  );
+  const targetRect = {
+    x: targetFace.minX - targetFace.width * 0.17,
+    y: targetFace.minY - targetFace.height * 0.2,
+    width: targetFace.width * 1.34,
+    height: targetFace.height * 1.4,
+  };
+
+  const targetLeft = targetPoints[234];
+  const targetRight = targetPoints[454];
+  const angle = targetLeft && targetRight
+    ? clamp(Math.atan2(targetRight.y - targetLeft.y, Math.abs(targetRight.x - targetLeft.x)), -0.42, 0.42)
+    : 0;
+
+  layerCtx.save();
+  layerCtx.translate(targetRect.x + targetRect.width / 2, targetRect.y + targetRect.height / 2);
+  layerCtx.rotate(angle);
+  layerCtx.drawImage(
+    photo.image,
+    sourceRect.x,
+    sourceRect.y,
+    sourceRect.width,
+    sourceRect.height,
+    -targetRect.width / 2,
+    -targetRect.height / 2,
+    targetRect.width,
+    targetRect.height,
+  );
+  layerCtx.restore();
+
+  maskCtx.save();
+  maskCtx.filter = `blur(${Math.max(8, edgeSoftness * 1.2)}px)`;
+  maskCtx.fillStyle = "#fff";
+  maskCtx.translate(targetRect.x + targetRect.width / 2, targetRect.y + targetRect.height / 2);
+  maskCtx.rotate(angle);
+  maskCtx.beginPath();
+  maskCtx.ellipse(0, 0, targetRect.width * 0.43, targetRect.height * 0.48, 0, 0, Math.PI * 2);
+  maskCtx.fill();
+  maskCtx.restore();
 
   layerCtx.save();
   layerCtx.globalCompositeOperation = "destination-in";
@@ -1846,7 +1885,7 @@ function App() {
         <label className="select-row">
           <span>Overlay mode</span>
           <select value={overlayMode} onChange={(event) => setOverlayMode(event.target.value as OverlayMode)}>
-            <option value="swap">Face swap</option>
+            <option value="swap">Face swap - stable</option>
             <option value="portrait">Full photo lock</option>
             <option value="mesh">Expression mesh with hair - experimental</option>
             <option value="flat">Flat photo</option>
@@ -1880,7 +1919,7 @@ function App() {
           <Metric label="Smile L/R" value={((facialPerformance?.mouth.smileLeft ?? 0) + (facialPerformance?.mouth.smileRight ?? 0)) / 2} />
           <Metric label="Confidence" value={facialPerformance?.trackingConfidence ?? 0} />
         </div>
-        <div className="note">Face swap replaces the live face area with the uploaded face and follows head movement. Use Neural render for model-backed output.</div>
+        <div className="note">Face swap uses a stable aligned crop to avoid tearing. Use Neural render for model-backed expression and mouth movement.</div>
       </aside>
     </main>
   );
