@@ -83,6 +83,7 @@ type BlendPenPoint = {
 type HairMotion = {
   x: number;
   y: number;
+  rotation: number;
 };
 
 const FACE_OVAL = [
@@ -97,6 +98,10 @@ const LIPS = [
   61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291, 308, 324, 318, 402, 317,
   14, 87, 178, 88, 95,
 ];
+const LEFT_BROW = [70, 63, 105, 66, 107];
+const RIGHT_BROW = [336, 296, 334, 293, 300];
+const IDENTITY_LOCK_LANDMARKS = new Set([...FACE_OVAL, 127, 162, 21, 54, 103, 67, 109, 356, 389, 251, 284, 332, 297, 338]);
+const EXPRESSION_LANDMARKS = new Set([...LEFT_EYE, ...RIGHT_EYE, ...LEFT_BROW, ...RIGHT_BROW, ...LIPS]);
 
 const CALIBRATION_POSES: CalibrationPose[] = [
   "Neutral",
@@ -253,6 +258,44 @@ function clampRectToImage(
   return { x, y, width: right - x, height: bottom - y };
 }
 
+function createIdentityLockedTargetPoints(sourcePoints: Point[], driverPoints: Point[]) {
+  const sourceFace = pointBounds(sourcePoints, FACE_OVAL);
+  const driverFace = pointBounds(driverPoints, FACE_OVAL);
+  if (sourceFace.width <= 0 || sourceFace.height <= 0 || driverFace.width <= 0 || driverFace.height <= 0) {
+    return driverPoints;
+  }
+
+  const sourceCenter = {
+    x: sourceFace.minX + sourceFace.width / 2,
+    y: sourceFace.minY + sourceFace.height / 2,
+  };
+  const driverCenter = {
+    x: driverFace.minX + driverFace.width / 2,
+    y: driverFace.minY + driverFace.height / 2,
+  };
+  const scale = Math.min(driverFace.width / sourceFace.width, driverFace.height / sourceFace.height);
+
+  return driverPoints.map((driverPoint, index) => {
+    const sourcePoint = sourcePoints[index];
+    if (!sourcePoint) return driverPoint;
+
+    const sourceShapedPoint = {
+      x: driverCenter.x + (sourcePoint.x - sourceCenter.x) * scale,
+      y: driverCenter.y + (sourcePoint.y - sourceCenter.y) * scale,
+    };
+    const identityWeight = IDENTITY_LOCK_LANDMARKS.has(index)
+      ? 0.84
+      : EXPRESSION_LANDMARKS.has(index)
+        ? 0.48
+        : 0.68;
+
+    return {
+      x: sourceShapedPoint.x * identityWeight + driverPoint.x * (1 - identityWeight),
+      y: sourceShapedPoint.y * identityWeight + driverPoint.y * (1 - identityWeight),
+    };
+  });
+}
+
 function transformTargetLandmarks(
   points: NormalizedLandmark[],
   width: number,
@@ -339,56 +382,62 @@ function drawExpandedHeadPlate(
   const sourceFace = pointBounds(sourcePoints, FACE_OVAL);
   const targetFace = pointBounds(targetPoints, FACE_OVAL);
   if (sourceFace.width <= 0 || sourceFace.height <= 0 || targetFace.width <= 0 || targetFace.height <= 0) {
-    return;
+    return null;
   }
 
   const sourceRect = clampRectToImage(
     {
-      x: sourceFace.minX - sourceFace.width * 0.38,
-      y: sourceFace.minY - sourceFace.height * 0.72,
-      width: sourceFace.width * 1.76,
-      height: sourceFace.height * 1.92,
+      x: sourceFace.minX - sourceFace.width * 0.58,
+      y: sourceFace.minY - sourceFace.height * 0.96,
+      width: sourceFace.width * 2.16,
+      height: sourceFace.height * 2.88,
     },
     imageWidth,
     imageHeight,
   );
   const targetRect = {
-    x: targetFace.minX - targetFace.width * 0.34 + hairMotion.x,
-    y: targetFace.minY - targetFace.height * 0.66 + hairMotion.y,
-    width: targetFace.width * 1.68,
-    height: targetFace.height * 1.88,
+    x: targetFace.minX - targetFace.width * 0.58 + hairMotion.x,
+    y: targetFace.minY - targetFace.height * 0.9 + hairMotion.y,
+    width: targetFace.width * 2.16,
+    height: targetFace.height * 2.72,
   };
 
   const plate = document.createElement("canvas");
   const plateCtx = plate.getContext("2d");
   const mask = document.createElement("canvas");
   const maskCtx = mask.getContext("2d");
-  if (!plateCtx || !maskCtx) return;
+  if (!plateCtx || !maskCtx) return null;
 
   plate.width = width;
   plate.height = height;
   mask.width = width;
   mask.height = height;
 
+  plateCtx.save();
+  plateCtx.translate(targetRect.x + targetRect.width / 2, targetRect.y + targetRect.height / 2);
+  plateCtx.rotate(hairMotion.rotation);
   plateCtx.drawImage(
     photo.image,
     sourceRect.x,
     sourceRect.y,
     sourceRect.width,
     sourceRect.height,
-    targetRect.x,
-    targetRect.y,
+    -targetRect.width / 2,
+    -targetRect.height / 2,
     targetRect.width,
     targetRect.height,
   );
+  plateCtx.restore();
 
   maskCtx.save();
-  maskCtx.filter = `blur(${Math.max(8, edgeSoftness * 1.5)}px)`;
+  maskCtx.filter = `blur(${Math.max(10, edgeSoftness * 1.8)}px)`;
   maskCtx.fillStyle = "#fff";
+  maskCtx.translate(targetRect.x + targetRect.width / 2, targetRect.y + targetRect.height / 2);
+  maskCtx.rotate(hairMotion.rotation);
   maskCtx.beginPath();
   maskCtx.ellipse(
-    targetRect.x + targetRect.width / 2,
-    targetRect.y + targetRect.height * 0.5,
+    0,
+    0,
     targetRect.width / 2,
     targetRect.height / 2,
     0,
@@ -404,6 +453,33 @@ function drawExpandedHeadPlate(
   plateCtx.restore();
 
   layerCtx.drawImage(plate, 0, 0);
+  return targetRect;
+}
+
+function drawGeneratedMask(
+  maskCtx: CanvasRenderingContext2D,
+  targetPoints: Point[],
+  edgeSoftness: number,
+  headPlateRect: { x: number; y: number; width: number; height: number } | null,
+) {
+  maskCtx.save();
+  maskCtx.filter = `blur(${edgeSoftness}px)`;
+  maskCtx.fillStyle = "#fff";
+  if (headPlateRect) {
+    maskCtx.beginPath();
+    maskCtx.ellipse(
+      headPlateRect.x + headPlateRect.width / 2,
+      headPlateRect.y + headPlateRect.height / 2,
+      headPlateRect.width / 2,
+      headPlateRect.height / 2,
+      0,
+      0,
+      Math.PI * 2,
+    );
+    maskCtx.fill();
+  }
+  drawClosedLandmarkFill(maskCtx, targetPoints, FACE_OVAL);
+  maskCtx.restore();
 }
 
 function applyBlendPen(
@@ -457,12 +533,13 @@ function drawWarpedFaceMesh(
   const sourcePoints = photo.mesh.landmarks.map((point) =>
     toPixelPoint(point, imageWidth, imageHeight),
   );
+  const identityTargetPoints = createIdentityLockedTargetPoints(sourcePoints, targetPoints);
 
-  drawExpandedHeadPlate(
+  const headPlateRect = drawExpandedHeadPlate(
     layerCtx,
     photo,
     sourcePoints,
-    targetPoints,
+    identityTargetPoints,
     imageWidth,
     imageHeight,
     edgeSoftness,
@@ -479,18 +556,14 @@ function drawWarpedFaceMesh(
       sourcePoints[c],
     ];
     const targetTriangle: [Point, Point, Point] = [
-      targetPoints[a],
-      targetPoints[b],
-      targetPoints[c],
+      identityTargetPoints[a],
+      identityTargetPoints[b],
+      identityTargetPoints[c],
     ];
     drawTriangleImagePatch(layerCtx, photo.image, sourceTriangle, targetTriangle);
   }
 
-  maskCtx.save();
-  maskCtx.filter = `blur(${edgeSoftness}px)`;
-  maskCtx.fillStyle = "#fff";
-  drawClosedLandmarkFill(maskCtx, targetPoints, FACE_OVAL);
-  maskCtx.restore();
+  drawGeneratedMask(maskCtx, identityTargetPoints, edgeSoftness, headPlateRect);
 
   layerCtx.save();
   layerCtx.globalCompositeOperation = "destination-in";
@@ -542,7 +615,7 @@ function App() {
   const blendPenUndoRef = useRef<BlendPenPoint[][]>([]);
   const blendPenRedoRef = useRef<BlendPenPoint[][]>([]);
   const previousHeadCenterRef = useRef<Point | null>(null);
-  const hairSwayRef = useRef<HairMotion>({ x: 0, y: 0 });
+  const hairSwayRef = useRef<HairMotion>({ x: 0, y: 0, rotation: 0 });
   const recorderRef = useRef<MediaRecorder | null>(null);
   const recordingChunksRef = useRef<BlobPart[]>([]);
   const hiddenAtRef = useRef<number | null>(null);
@@ -782,10 +855,12 @@ function App() {
       const targetHairSway = {
         x: clamp(-velocity.x * 1.85 * (hairMotionStrength / 100), -targetFaceBounds.width * 0.16, targetFaceBounds.width * 0.16),
         y: clamp(-velocity.y * 1.2 * (hairMotionStrength / 100), -targetFaceBounds.height * 0.08, targetFaceBounds.height * 0.08),
+        rotation: clamp(-velocity.x * 0.0028 * (hairMotionStrength / 100), -0.08, 0.08),
       };
       hairSwayRef.current = {
-        x: hairSwayRef.current.x * 0.72 + targetHairSway.x * 0.28,
-        y: hairSwayRef.current.y * 0.72 + targetHairSway.y * 0.28,
+        x: hairSwayRef.current.x * 0.66 + targetHairSway.x * 0.34,
+        y: hairSwayRef.current.y * 0.7 + targetHairSway.y * 0.3,
+        rotation: hairSwayRef.current.rotation * 0.62 + targetHairSway.rotation * 0.38,
       };
       const left = mappedFace[234];
       const right = mappedFace[454];
@@ -1127,7 +1202,7 @@ function App() {
     blendPenUndoRef.current = [];
     blendPenRedoRef.current = [];
     previousHeadCenterRef.current = null;
-    hairSwayRef.current = { x: 0, y: 0 };
+    hairSwayRef.current = { x: 0, y: 0, rotation: 0 };
     setBlendPenPointCount(0);
     setBlendPenUndoCount(0);
     setBlendPenRedoCount(0);
