@@ -16,7 +16,7 @@ function clamp01(value: number) {
 
 export function estimateHeadPose(landmarks?: NormalizedLandmark[]): FacialPerformance["headPose"] {
   if (!landmarks?.length) {
-    return { pitch: 0, yaw: 0, roll: 0, x: 0, y: 0, z: 0 };
+    return { pitch: 0, yaw: 0, roll: 0, translationX: 0, translationY: 0, translationZ: 0 };
   }
 
   const left = landmarks[234];
@@ -34,15 +34,16 @@ export function estimateHeadPose(landmarks?: NormalizedLandmark[]): FacialPerfor
     pitch,
     yaw,
     roll,
-    x: nose.x - 0.5,
-    y: nose.y - 0.5,
-    z: clamp01(1 - Math.abs(right.x - left.x)) || 0,
+    translationX: nose.x - 0.5,
+    translationY: nose.y - 0.5,
+    translationZ: clamp01(1 - Math.abs(right.x - left.x)) || 0,
   };
 }
 
 export function mapBlendshapesToPerformance(
   blendshapes: Classifications[] | undefined,
   landmarks?: NormalizedLandmark[],
+  frameId = 0,
 ): FacialPerformance {
   const categories = (blendshapes?.[0]?.categories ?? []) as BlendCategory[];
   const leftBlink = score(categories, "eyeBlinkLeft");
@@ -53,6 +54,7 @@ export function mapBlendshapesToPerformance(
   const confidence = landmarks?.length ? 1 : 0;
 
   return {
+    frameId,
     timestamp: performance.now(),
     headPose: estimateHeadPose(landmarks),
     eyes: {
@@ -64,25 +66,30 @@ export function mapBlendshapesToPerformance(
       gazeY: score(categories, "eyeLookUpLeft") - score(categories, "eyeLookDownLeft"),
     },
     brows: {
-      leftRaise: score(categories, "browOuterUpLeft"),
-      rightRaise: score(categories, "browOuterUpRight"),
+      leftOuterRaise: score(categories, "browOuterUpLeft"),
+      rightOuterRaise: score(categories, "browOuterUpRight"),
       innerRaise: score(categories, "browInnerUp"),
       lower: Math.max(score(categories, "browDownLeft"), score(categories, "browDownRight")),
     },
     mouth: {
-      open: clamp01(mouthOpen),
       jawOpen: score(categories, "jawOpen"),
+      mouthOpen: clamp01(mouthOpen),
+      lipClose: Math.max(score(categories, "mouthClose"), score(categories, "mouthPressLeft"), score(categories, "mouthPressRight")),
       smileLeft,
       smileRight,
       frownLeft: score(categories, "mouthFrownLeft"),
       frownRight: score(categories, "mouthFrownRight"),
       pucker: score(categories, "mouthPucker"),
-      stretch: Math.max(score(categories, "mouthStretchLeft"), score(categories, "mouthStretchRight")),
-      press: Math.max(score(categories, "mouthPressLeft"), score(categories, "mouthPressRight")),
+      funnel: score(categories, "mouthFunnel"),
+      stretchLeft: score(categories, "mouthStretchLeft"),
+      stretchRight: score(categories, "mouthStretchRight"),
+      pressLeft: score(categories, "mouthPressLeft"),
+      pressRight: score(categories, "mouthPressRight"),
     },
     cheeks: {
       leftRaise: score(categories, "cheekSquintLeft"),
       rightRaise: score(categories, "cheekSquintRight"),
+      puff: 0,
     },
     trackingConfidence: confidence,
   };
@@ -103,9 +110,9 @@ export function smoothPerformance(
       pitch: mix(previous.headPose.pitch, next.headPose.pitch),
       yaw: mix(previous.headPose.yaw, next.headPose.yaw),
       roll: mix(previous.headPose.roll, next.headPose.roll),
-      x: mix(previous.headPose.x, next.headPose.x),
-      y: mix(previous.headPose.y, next.headPose.y),
-      z: mix(previous.headPose.z, next.headPose.z),
+      translationX: mix(previous.headPose.translationX, next.headPose.translationX),
+      translationY: mix(previous.headPose.translationY, next.headPose.translationY),
+      translationZ: mix(previous.headPose.translationZ, next.headPose.translationZ),
     },
     eyes: {
       leftBlink: mix(previous.eyes.leftBlink, next.eyes.leftBlink),
@@ -116,25 +123,30 @@ export function smoothPerformance(
       gazeY: mix(previous.eyes.gazeY, next.eyes.gazeY),
     },
     brows: {
-      leftRaise: mix(previous.brows.leftRaise, next.brows.leftRaise),
-      rightRaise: mix(previous.brows.rightRaise, next.brows.rightRaise),
+      leftOuterRaise: mix(previous.brows.leftOuterRaise, next.brows.leftOuterRaise),
+      rightOuterRaise: mix(previous.brows.rightOuterRaise, next.brows.rightOuterRaise),
       innerRaise: mix(previous.brows.innerRaise, next.brows.innerRaise),
       lower: mix(previous.brows.lower, next.brows.lower),
     },
     mouth: {
-      open: mix(previous.mouth.open, next.mouth.open),
       jawOpen: mix(previous.mouth.jawOpen, next.mouth.jawOpen),
+      mouthOpen: mix(previous.mouth.mouthOpen, next.mouth.mouthOpen),
+      lipClose: mix(previous.mouth.lipClose, next.mouth.lipClose),
       smileLeft: mix(previous.mouth.smileLeft, next.mouth.smileLeft),
       smileRight: mix(previous.mouth.smileRight, next.mouth.smileRight),
       frownLeft: mix(previous.mouth.frownLeft, next.mouth.frownLeft),
       frownRight: mix(previous.mouth.frownRight, next.mouth.frownRight),
       pucker: mix(previous.mouth.pucker, next.mouth.pucker),
-      stretch: mix(previous.mouth.stretch, next.mouth.stretch),
-      press: mix(previous.mouth.press, next.mouth.press),
+      funnel: mix(previous.mouth.funnel, next.mouth.funnel),
+      stretchLeft: mix(previous.mouth.stretchLeft, next.mouth.stretchLeft),
+      stretchRight: mix(previous.mouth.stretchRight, next.mouth.stretchRight),
+      pressLeft: mix(previous.mouth.pressLeft, next.mouth.pressLeft),
+      pressRight: mix(previous.mouth.pressRight, next.mouth.pressRight),
     },
     cheeks: {
       leftRaise: mix(previous.cheeks.leftRaise, next.cheeks.leftRaise),
       rightRaise: mix(previous.cheeks.rightRaise, next.cheeks.rightRaise),
+      puff: mix(previous.cheeks.puff, next.cheeks.puff),
     },
     trackingConfidence: mix(previous.trackingConfidence, next.trackingConfidence),
   };

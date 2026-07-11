@@ -32,17 +32,26 @@ npm run build
 
 ## Architecture
 
+Detailed reports:
+
+- `docs/AUDIT.md`
+- `docs/ARCHITECTURE.md`
+- `docs/DEFECT_REPORT.md`
+- `docs/MIGRATION_PLAN.md`
+- `docs/MODEL_COMPARISON.md`
+- `docs/VIRTUAL_CAMERA_PLAN.md`
+
 Important folders:
 
 - `src/tracking`: facial-performance mapping from MediaPipe blendshapes and landmarks.
-- `src/rendering`: renderer interface for later neural or 3D renderers.
+- `src/rendering`: renderer interface for later neural or 3D renderers; the current renderer is Fast Preview only.
 - `src/target`: target-face model types and preparation boundary.
 - `src/services`: image validation, consent/session audit, recording metadata, report flow, storage mode.
 - `src/main.tsx`: current product shell plus the working MediaPipe/canvas prototype.
 
 The pipeline is:
 
-`camera frame -> MediaPipe landmarks/blendshapes -> FacialPerformance -> smoothed motion -> mesh warp -> edge/lighting composite -> canvas output`
+`camera frame -> MediaPipe landmarks/blendshapes -> FacialPerformanceFrame -> smoothed motion -> Fast Preview mesh warp -> edge/lighting composite -> canvas output`
 
 ## What Is Fully Implemented
 
@@ -53,9 +62,9 @@ The pipeline is:
 - Camera device selection and live preview.
 - MediaPipe dense face landmarks.
 - MediaPipe blendshape output enabled.
-- Normalized `FacialPerformance` model for head pose, eyes, brows, mouth, cheeks, and confidence.
+- Normalized `FacialPerformanceFrame` model for head pose, eyes, brows, mouth, cheeks, and confidence.
 - Temporal smoothing control.
-- Mesh-based target photo warping.
+- Fast Preview mesh-based target photo warping.
 - Edge feathering, eye/mouth cutouts, and basic live lighting match.
 - Persistent visible `AI-Generated - About Face` watermark on canvas output.
 - Snapshot export.
@@ -73,6 +82,7 @@ The pipeline is:
 - Occlusion handling is limited to confidence fallback and conservative rendering.
 - Calibration currently records the user flow steps; it does not yet build a full per-user neutral baseline.
 - Supabase Auth, private storage, encryption, and account controls are not enabled in the local personal MVP.
+- The current mesh renderer still lives mostly in `src/main.tsx`; `src/rendering/MeshPreviewRenderer.ts` is the new contract boundary for extracting it.
 
 ## Simulated or Future Work
 
@@ -91,14 +101,15 @@ The app does not include voice cloning, facial recognition identity matching, au
 
 ## Known Limitations
 
-The renderer is mesh-based. It can make a target photo move, blink, speak, and follow head motion, but it will not perfectly reproduce a person from a single image. Results depend heavily on the uploaded photo, camera quality, lighting, CPU/GPU performance, and MediaPipe tracking stability. Model behavior may vary across skin tones, face shapes, glasses, facial hair, occlusions, and lighting conditions.
+The current renderer is a Fast Preview mesh renderer. It can make a target photo move, blink, speak, and follow head motion, but it will not realistically reproduce a person from a single image. It cannot synthesize hidden anatomy such as inner mouth, teeth, eyelid surfaces, side-view facial geometry, hair, or neck boundaries. Results depend heavily on the uploaded photo, camera quality, lighting, CPU/GPU performance, and MediaPipe tracking stability. Model behavior may vary across skin tones, face shapes, glasses, facial hair, occlusions, and lighting conditions.
 
 ## Future Roadmap
 
 1. Implement real neutral calibration baselines for each expression channel.
 2. Move tracking into a Web Worker and add adaptive frame skipping.
-3. Replace 2D canvas mesh with WebGL or Three.js target mesh.
-4. Add proper segmentation, depth, occlusion, and region reconstruction.
-5. Add optional Supabase Auth, private buckets, signed URLs, encrypted saved projects, and server-backed abuse controls.
-6. Add licensed neural reenactment renderer behind the `FaceRenderer` interface.
-7. Add desktop virtual-camera output as a separate app, not browser-only.
+3. Extract the current canvas renderer into `MeshPreviewRenderer`.
+4. Replace 2D canvas mesh with WebGL or Three.js target mesh for an intermediate 3D mode.
+5. Add proper segmentation, depth, occlusion, and region reconstruction.
+6. Add optional Supabase Auth, private buckets, signed URLs, encrypted saved projects, and server-backed abuse controls.
+7. Add licensed neural reenactment renderer behind the `FaceReenactmentRenderer` interface.
+8. Add desktop virtual-camera output as a separate app, not browser-only.

@@ -66,15 +66,16 @@ export type CalibrationPose =
   | "Tilt down"
   | "Tilt side to side";
 
-export interface FacialPerformance {
+export interface FacialPerformanceFrame {
+  frameId: number;
   timestamp: number;
   headPose: {
     pitch: number;
     yaw: number;
     roll: number;
-    x: number;
-    y: number;
-    z: number;
+    translationX: number;
+    translationY: number;
+    translationZ: number;
   };
   eyes: {
     leftBlink: number;
@@ -85,25 +86,81 @@ export interface FacialPerformance {
     gazeY: number;
   };
   brows: {
-    leftRaise: number;
-    rightRaise: number;
+    leftOuterRaise: number;
+    rightOuterRaise: number;
     innerRaise: number;
     lower: number;
   };
   mouth: {
-    open: number;
     jawOpen: number;
+    mouthOpen: number;
+    lipClose: number;
     smileLeft: number;
     smileRight: number;
     frownLeft: number;
     frownRight: number;
     pucker: number;
-    stretch: number;
-    press: number;
+    funnel: number;
+    stretchLeft: number;
+    stretchRight: number;
+    pressLeft: number;
+    pressRight: number;
   };
   cheeks: {
     leftRaise: number;
     rightRaise: number;
+    puff: number;
   };
   trackingConfidence: number;
 }
+
+export type FacialPerformance = FacialPerformanceFrame;
+
+export interface TargetIdentity {
+  id: string;
+  originalImage: ImageData;
+  alignedFace: ImageData;
+  faceMask: ImageData;
+  hairMask?: ImageData;
+  canonicalData?: unknown;
+  identityEmbedding?: Float32Array;
+}
+
+export interface RenderedFrame {
+  frameId: number;
+  timestamp: number;
+  image: ImageBitmap | VideoFrame;
+  width: number;
+  height: number;
+  confidence: number;
+}
+
+export interface FaceReenactmentRenderer {
+  readonly name: string;
+  readonly mode: "mesh-preview" | "neural" | "3d";
+  initialize(identity: TargetIdentity): Promise<void>;
+  render(performance: FacialPerformanceFrame, sourceFrame?: VideoFrame): Promise<RenderedFrame>;
+  dispose(): Promise<void>;
+}
+
+export type SmoothingProfile = {
+  headTranslation: number;
+  headRotation: number;
+  brows: number;
+  smile: number;
+  mouth: number;
+  jaw: number;
+  blinks: number;
+  gaze: number;
+};
+
+export const DEFAULT_SMOOTHING_PROFILE: SmoothingProfile = {
+  headTranslation: 45,
+  headRotation: 42,
+  brows: 22,
+  smile: 18,
+  mouth: 8,
+  jaw: 8,
+  blinks: 2,
+  gaze: 38,
+};

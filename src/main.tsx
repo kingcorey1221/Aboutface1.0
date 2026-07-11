@@ -386,6 +386,7 @@ function App() {
     null,
   );
   const lastVideoTimeRef = useRef(-1);
+  const frameIdRef = useRef(0);
   const lastResultRef = useRef<FaceLandmarkerResult | null>(null);
   const lastPerformanceRef = useRef<FacialPerformance | null>(null);
   const fpsTimesRef = useRef<number[]>([]);
@@ -597,6 +598,7 @@ function App() {
       const mappedPerformance = mapBlendshapesToPerformance(
         lastResultRef.current?.faceBlendshapes,
         face,
+        frameIdRef.current++,
       );
       const smoothedPerformance = smoothPerformance(
         lastPerformanceRef.current,
@@ -1202,7 +1204,7 @@ function App() {
           <Metric label="Roll" value={facialPerformance?.headPose.roll ?? 0} />
           <Metric label="Left blink" value={facialPerformance?.eyes.leftBlink ?? 0} />
           <Metric label="Right blink" value={facialPerformance?.eyes.rightBlink ?? 0} />
-          <Metric label="Mouth open" value={facialPerformance?.mouth.open ?? 0} />
+          <Metric label="Mouth open" value={facialPerformance?.mouth.mouthOpen ?? 0} />
           <Metric label="Smile L/R" value={((facialPerformance?.mouth.smileLeft ?? 0) + (facialPerformance?.mouth.smileRight ?? 0)) / 2} />
           <Metric label="Confidence" value={facialPerformance?.trackingConfidence ?? 0} />
         </div>
