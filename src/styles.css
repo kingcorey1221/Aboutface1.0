@@ -310,6 +310,12 @@ h1 {
   gap: 10px;
 }
 
+.button-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
 .button {
   display: inline-flex;
   align-items: center;
@@ -390,6 +396,11 @@ canvas {
   height: 100%;
   min-height: 420px;
   object-fit: contain;
+}
+
+canvas.blend-pen-active {
+  cursor: crosshair;
+  touch-action: none;
 }
 
 .camera-frame > video + canvas {

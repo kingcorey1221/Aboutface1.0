@@ -14,6 +14,8 @@ import {
   Sparkles,
   Square,
   Trash2,
+  Redo2,
+  Undo2,
 } from "lucide-react";
 import {
   FaceLandmarker,
@@ -69,6 +71,18 @@ type PhotoAsset = {
   meshStatus: "ready" | "no-face" | "multiple-faces" | "side-profile" | "error";
   consentTimestamp: string;
   validationWarnings: string[];
+};
+
+type BlendPenPoint = {
+  x: number;
+  y: number;
+  radius: number;
+  strength: number;
+};
+
+type HairMotion = {
+  x: number;
+  y: number;
 };
 
 const FACE_OVAL = [
@@ -209,6 +223,36 @@ function toPixelPoint(point: NormalizedLandmark, width: number, height: number):
   return { x: point.x * width, y: point.y * height };
 }
 
+function pointBounds(points: Point[], indexes: number[]) {
+  let minX = Number.POSITIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+
+  indexes.forEach((index) => {
+    const point = points[index];
+    if (!point) return;
+    minX = Math.min(minX, point.x);
+    minY = Math.min(minY, point.y);
+    maxX = Math.max(maxX, point.x);
+    maxY = Math.max(maxY, point.y);
+  });
+
+  return { minX, minY, maxX, maxY, width: maxX - minX, height: maxY - minY };
+}
+
+function clampRectToImage(
+  rect: { x: number; y: number; width: number; height: number },
+  imageWidth: number,
+  imageHeight: number,
+) {
+  const x = clamp(rect.x, 0, imageWidth - 1);
+  const y = clamp(rect.y, 0, imageHeight - 1);
+  const right = clamp(rect.x + rect.width, x + 1, imageWidth);
+  const bottom = clamp(rect.y + rect.height, y + 1, imageHeight);
+  return { x, y, width: right - x, height: bottom - y };
+}
+
 function transformTargetLandmarks(
   points: NormalizedLandmark[],
   width: number,
@@ -280,6 +324,106 @@ function drawTriangleImagePatch(
   ctx.restore();
 }
 
+function drawExpandedHeadPlate(
+  layerCtx: CanvasRenderingContext2D,
+  photo: PhotoAsset,
+  sourcePoints: Point[],
+  targetPoints: Point[],
+  imageWidth: number,
+  imageHeight: number,
+  edgeSoftness: number,
+  hairMotion: HairMotion,
+) {
+  const width = layerCtx.canvas.width;
+  const height = layerCtx.canvas.height;
+  const sourceFace = pointBounds(sourcePoints, FACE_OVAL);
+  const targetFace = pointBounds(targetPoints, FACE_OVAL);
+  if (sourceFace.width <= 0 || sourceFace.height <= 0 || targetFace.width <= 0 || targetFace.height <= 0) {
+    return;
+  }
+
+  const sourceRect = clampRectToImage(
+    {
+      x: sourceFace.minX - sourceFace.width * 0.38,
+      y: sourceFace.minY - sourceFace.height * 0.72,
+      width: sourceFace.width * 1.76,
+      height: sourceFace.height * 1.92,
+    },
+    imageWidth,
+    imageHeight,
+  );
+  const targetRect = {
+    x: targetFace.minX - targetFace.width * 0.34 + hairMotion.x,
+    y: targetFace.minY - targetFace.height * 0.66 + hairMotion.y,
+    width: targetFace.width * 1.68,
+    height: targetFace.height * 1.88,
+  };
+
+  const plate = document.createElement("canvas");
+  const plateCtx = plate.getContext("2d");
+  const mask = document.createElement("canvas");
+  const maskCtx = mask.getContext("2d");
+  if (!plateCtx || !maskCtx) return;
+
+  plate.width = width;
+  plate.height = height;
+  mask.width = width;
+  mask.height = height;
+
+  plateCtx.drawImage(
+    photo.image,
+    sourceRect.x,
+    sourceRect.y,
+    sourceRect.width,
+    sourceRect.height,
+    targetRect.x,
+    targetRect.y,
+    targetRect.width,
+    targetRect.height,
+  );
+
+  maskCtx.save();
+  maskCtx.filter = `blur(${Math.max(8, edgeSoftness * 1.5)}px)`;
+  maskCtx.fillStyle = "#fff";
+  maskCtx.beginPath();
+  maskCtx.ellipse(
+    targetRect.x + targetRect.width / 2,
+    targetRect.y + targetRect.height * 0.5,
+    targetRect.width / 2,
+    targetRect.height / 2,
+    0,
+    0,
+    Math.PI * 2,
+  );
+  maskCtx.fill();
+  maskCtx.restore();
+
+  plateCtx.save();
+  plateCtx.globalCompositeOperation = "destination-in";
+  plateCtx.drawImage(mask, 0, 0);
+  plateCtx.restore();
+
+  layerCtx.drawImage(plate, 0, 0);
+}
+
+function applyBlendPen(
+  layerCtx: CanvasRenderingContext2D,
+  points: BlendPenPoint[],
+) {
+  if (points.length === 0) return;
+
+  layerCtx.save();
+  layerCtx.globalCompositeOperation = "destination-out";
+  points.forEach((point) => {
+    layerCtx.filter = `blur(${Math.max(2, point.radius * 0.35)}px)`;
+    layerCtx.fillStyle = `rgba(0, 0, 0, ${point.strength})`;
+    layerCtx.beginPath();
+    layerCtx.arc(point.x, point.y, point.radius, 0, Math.PI * 2);
+    layerCtx.fill();
+  });
+  layerCtx.restore();
+}
+
 function drawWarpedFaceMesh(
   ctx: CanvasRenderingContext2D,
   video: HTMLVideoElement,
@@ -289,6 +433,8 @@ function drawWarpedFaceMesh(
   blendMode: BlendMode,
   edgeSoftness: number,
   lightingStrength: number,
+  blendPenPoints: BlendPenPoint[],
+  hairMotion: HairMotion,
 ) {
   if (!photo.mesh) return false;
 
@@ -310,6 +456,17 @@ function drawWarpedFaceMesh(
   const imageHeight = photo.image.naturalHeight || photo.image.height;
   const sourcePoints = photo.mesh.landmarks.map((point) =>
     toPixelPoint(point, imageWidth, imageHeight),
+  );
+
+  drawExpandedHeadPlate(
+    layerCtx,
+    photo,
+    sourcePoints,
+    targetPoints,
+    imageWidth,
+    imageHeight,
+    edgeSoftness,
+    hairMotion,
   );
 
   for (let index = 0; index < photo.mesh.triangles.length; index += 3) {
@@ -354,6 +511,8 @@ function drawWarpedFaceMesh(
     layerCtx.restore();
   }
 
+  applyBlendPen(layerCtx, blendPenPoints);
+
   ctx.save();
   ctx.globalAlpha = opacity / 100;
   ctx.globalCompositeOperation = blendModeToComposite[blendMode];
@@ -379,6 +538,11 @@ function App() {
   const lastPerformanceRef = useRef<FacialPerformance | null>(null);
   const fpsTimesRef = useRef<number[]>([]);
   const photosRef = useRef<PhotoAsset[]>([]);
+  const blendPenPointsRef = useRef<BlendPenPoint[]>([]);
+  const blendPenUndoRef = useRef<BlendPenPoint[][]>([]);
+  const blendPenRedoRef = useRef<BlendPenPoint[][]>([]);
+  const previousHeadCenterRef = useRef<Point | null>(null);
+  const hairSwayRef = useRef<HairMotion>({ x: 0, y: 0 });
   const recorderRef = useRef<MediaRecorder | null>(null);
   const recordingChunksRef = useRef<BlobPart[]>([]);
   const hiddenAtRef = useRef<number | null>(null);
@@ -411,9 +575,16 @@ function App() {
   const [opacity, setOpacity] = useState(100);
   const [scale, setScale] = useState(109);
   const [offsetY, setOffsetY] = useState(-2);
-  const [edgeSoftness, setEdgeSoftness] = useState(8);
-  const [lightingStrength, setLightingStrength] = useState(18);
+  const [edgeSoftness, setEdgeSoftness] = useState(14);
+  const [lightingStrength, setLightingStrength] = useState(26);
   const [smoothing, setSmoothing] = useState(45);
+  const [blendPenEnabled, setBlendPenEnabled] = useState(false);
+  const [blendPenSize, setBlendPenSize] = useState(38);
+  const [blendPenStrength, setBlendPenStrength] = useState(36);
+  const [blendPenPointCount, setBlendPenPointCount] = useState(0);
+  const [blendPenUndoCount, setBlendPenUndoCount] = useState(0);
+  const [blendPenRedoCount, setBlendPenRedoCount] = useState(0);
+  const [hairMotionStrength, setHairMotionStrength] = useState(55);
   const [rotation, setRotation] = useState(true);
   const [mirror, setMirror] = useState(true);
   const [debug, setDebug] = useState(false);
@@ -597,6 +768,25 @@ function App() {
         : face;
       const bounds = landmarkBounds(mappedFace, width, height);
       const targetPoints = transformTargetLandmarks(mappedFace, width, height, scale, offsetY);
+      const targetFaceBounds = pointBounds(targetPoints, FACE_OVAL);
+      const headCenter = {
+        x: targetFaceBounds.minX + targetFaceBounds.width / 2,
+        y: targetFaceBounds.minY + targetFaceBounds.height / 2,
+      };
+      const previousHeadCenter = previousHeadCenterRef.current ?? headCenter;
+      const velocity = {
+        x: headCenter.x - previousHeadCenter.x,
+        y: headCenter.y - previousHeadCenter.y,
+      };
+      previousHeadCenterRef.current = headCenter;
+      const targetHairSway = {
+        x: clamp(-velocity.x * 1.85 * (hairMotionStrength / 100), -targetFaceBounds.width * 0.16, targetFaceBounds.width * 0.16),
+        y: clamp(-velocity.y * 1.2 * (hairMotionStrength / 100), -targetFaceBounds.height * 0.08, targetFaceBounds.height * 0.08),
+      };
+      hairSwayRef.current = {
+        x: hairSwayRef.current.x * 0.72 + targetHairSway.x * 0.28,
+        y: hairSwayRef.current.y * 0.72 + targetHairSway.y * 0.28,
+      };
       const left = mappedFace[234];
       const right = mappedFace[454];
       const angle = rotation
@@ -621,6 +811,8 @@ function App() {
           blendMode,
           edgeSoftness,
           lightingStrength,
+          blendPenPointsRef.current,
+          hairSwayRef.current,
         );
       } else if (selectedPhoto) {
         ctx.globalAlpha = opacity / 100;
@@ -687,6 +879,7 @@ function App() {
     cameraOn,
     debug,
     edgeSoftness,
+    hairMotionStrength,
     lightingStrength,
     mirror,
     offsetY,
@@ -923,13 +1116,81 @@ function App() {
     setOpacity(100);
     setScale(109);
     setOffsetY(-2);
-    setEdgeSoftness(8);
-    setLightingStrength(18);
+    setEdgeSoftness(14);
+    setLightingStrength(26);
     setRotation(true);
     setMirror(true);
     setDebug(false);
     setBlendMode("normal");
     setOverlayMode("mesh");
+    blendPenPointsRef.current = [];
+    blendPenUndoRef.current = [];
+    blendPenRedoRef.current = [];
+    previousHeadCenterRef.current = null;
+    hairSwayRef.current = { x: 0, y: 0 };
+    setBlendPenPointCount(0);
+    setBlendPenUndoCount(0);
+    setBlendPenRedoCount(0);
+  }, []);
+
+  const beginBlendPenStroke = useCallback(() => {
+    blendPenUndoRef.current = [...blendPenUndoRef.current, [...blendPenPointsRef.current]].slice(-80);
+    blendPenRedoRef.current = [];
+    setBlendPenUndoCount(blendPenUndoRef.current.length);
+    setBlendPenRedoCount(0);
+  }, []);
+
+  const addBlendPenPoint = useCallback(
+    (event: React.PointerEvent<HTMLCanvasElement>) => {
+      if (!blendPenEnabled || !canvasRef.current) return;
+      const canvas = canvasRef.current;
+      const rect = canvas.getBoundingClientRect();
+      const x = ((event.clientX - rect.left) / rect.width) * canvas.width;
+      const y = ((event.clientY - rect.top) / rect.height) * canvas.height;
+      const scale = canvas.width / Math.max(1, rect.width);
+      blendPenPointsRef.current = [
+        ...blendPenPointsRef.current,
+        {
+          x,
+          y,
+          radius: blendPenSize * scale,
+          strength: blendPenStrength / 100,
+        },
+      ].slice(-600);
+      setBlendPenPointCount(blendPenPointsRef.current.length);
+    },
+    [blendPenEnabled, blendPenSize, blendPenStrength],
+  );
+
+  const clearBlendPen = useCallback(() => {
+    if (blendPenPointsRef.current.length > 0) {
+      blendPenUndoRef.current = [...blendPenUndoRef.current, [...blendPenPointsRef.current]].slice(-80);
+      blendPenRedoRef.current = [];
+    }
+    blendPenPointsRef.current = [];
+    setBlendPenPointCount(0);
+    setBlendPenUndoCount(blendPenUndoRef.current.length);
+    setBlendPenRedoCount(0);
+  }, []);
+
+  const undoBlendPen = useCallback(() => {
+    const previous = blendPenUndoRef.current.pop();
+    if (!previous) return;
+    blendPenRedoRef.current = [...blendPenRedoRef.current, [...blendPenPointsRef.current]].slice(-80);
+    blendPenPointsRef.current = previous;
+    setBlendPenPointCount(previous.length);
+    setBlendPenUndoCount(blendPenUndoRef.current.length);
+    setBlendPenRedoCount(blendPenRedoRef.current.length);
+  }, []);
+
+  const redoBlendPen = useCallback(() => {
+    const next = blendPenRedoRef.current.pop();
+    if (!next) return;
+    blendPenUndoRef.current = [...blendPenUndoRef.current, [...blendPenPointsRef.current]].slice(-80);
+    blendPenPointsRef.current = next;
+    setBlendPenPointCount(next.length);
+    setBlendPenUndoCount(blendPenUndoRef.current.length);
+    setBlendPenRedoCount(blendPenRedoRef.current.length);
   }, []);
 
   const storageStatus = getSecureStorageStatus();
@@ -1055,7 +1316,20 @@ function App() {
             )}
             <div className="camera-frame">
               <video ref={videoRef} playsInline muted />
-              <canvas ref={canvasRef} />
+              <canvas
+                ref={canvasRef}
+                className={blendPenEnabled ? "blend-pen-active" : ""}
+                onPointerDown={(event) => {
+                  if (!blendPenEnabled) return;
+                  event.currentTarget.setPointerCapture(event.pointerId);
+                  beginBlendPenStroke();
+                  addBlendPenPoint(event);
+                }}
+                onPointerMove={(event) => {
+                  if (!blendPenEnabled || event.buttons !== 1) return;
+                  addBlendPenPoint(event);
+                }}
+              />
               {!cameraOn && (
                 <div className="camera-placeholder">
                   <Camera size={42} />
@@ -1132,7 +1406,24 @@ function App() {
         <ControlSlider label="Vertical offset" value={offsetY} min={-35} max={35} onChange={setOffsetY} />
         <ControlSlider label="Edge softness" value={edgeSoftness} min={0} max={34} onChange={setEdgeSoftness} />
         <ControlSlider label="Live lighting" value={lightingStrength} min={0} max={85} onChange={setLightingStrength} />
+        <ControlSlider label="Hair motion" value={hairMotionStrength} min={0} max={100} onChange={setHairMotionStrength} />
         <ControlSlider label="Expression smoothing" value={smoothing} min={0} max={100} onChange={setSmoothing} />
+        <Toggle label="Edge blend pen" checked={blendPenEnabled} onChange={setBlendPenEnabled} />
+        <ControlSlider label="Pen size" value={blendPenSize} min={8} max={90} onChange={setBlendPenSize} />
+        <ControlSlider label="Pen strength" value={blendPenStrength} min={8} max={80} onChange={setBlendPenStrength} />
+        <div className="button-row">
+          <button className="button secondary" onClick={undoBlendPen} disabled={blendPenUndoCount === 0}>
+            <Undo2 size={17} />
+            Undo
+          </button>
+          <button className="button secondary" onClick={redoBlendPen} disabled={blendPenRedoCount === 0}>
+            <Redo2 size={17} />
+            Redo
+          </button>
+        </div>
+        <button className="button full secondary" onClick={clearBlendPen} disabled={blendPenPointCount === 0}>
+          Clear blend pen ({blendPenPointCount})
+        </button>
 
         <label className="select-row">
           <span>Overlay mode</span>
