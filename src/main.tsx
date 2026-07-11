@@ -1,0 +1,1278 @@
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createRoot } from "react-dom/client";
+import {
+  Camera,
+  CameraOff,
+  Download,
+  Eye,
+  EyeOff,
+  ImagePlus,
+  Info,
+  OctagonAlert,
+  Play,
+  RefreshCw,
+  ShieldCheck,
+  SlidersHorizontal,
+  Sparkles,
+  Square,
+  Trash2,
+} from "lucide-react";
+import {
+  FaceLandmarker,
+  FilesetResolver,
+  type FaceLandmarkerResult,
+  type NormalizedLandmark,
+} from "@mediapipe/tasks-vision";
+import Delaunator from "delaunator";
+import type {
+  AppStep,
+  CalibrationPose,
+  ConsentRecord,
+  FacialPerformance,
+  PerformanceStats,
+  SessionAuditRecord,
+} from "./types";
+import {
+  combineValidationResults,
+  validateFaceLandmarks,
+  validateImageDimensions,
+  validateImageFile,
+} from "./services/imageValidation";
+import { createConsentRecord, createSessionAudit, deleteAllLocalData } from "./services/consentLog";
+import { submitLocalReport } from "./services/errorReporting";
+import {
+  browserSupportsCanvasRecording,
+  createProvenanceMetadata,
+  EXPORT_WATERMARK,
+} from "./services/recording";
+import { getSecureStorageStatus } from "./services/secureStorage";
+import { mapBlendshapesToPerformance, smoothPerformance } from "./tracking/BlendshapeMapper";
+import "./styles.css";
+
+type BlendMode = "normal" | "multiply" | "screen" | "overlay" | "soft-light";
+type OverlayMode = "mesh" | "flat";
+
+type Point = {
+  x: number;
+  y: number;
+};
+
+type SourceMesh = {
+  landmarks: NormalizedLandmark[];
+  triangles: number[];
+};
+
+type PhotoAsset = {
+  id: string;
+  name: string;
+  url: string;
+  image: HTMLImageElement;
+  mesh: SourceMesh | null;
+  meshStatus: "ready" | "no-face" | "multiple-faces" | "side-profile" | "error";
+  consentTimestamp: string;
+  validationWarnings: string[];
+};
+
+const FACE_OVAL = [
+  10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378,
+  400, 377, 152, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21,
+  54, 103, 67, 109,
+];
+
+const LEFT_EYE = [33, 7, 163, 144, 145, 153, 154, 155, 133];
+const RIGHT_EYE = [362, 382, 381, 380, 374, 373, 390, 249, 263];
+const LIPS = [
+  61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291, 308, 324, 318, 402, 317,
+  14, 87, 178, 88, 95,
+];
+
+const CALIBRATION_POSES: CalibrationPose[] = [
+  "Neutral",
+  "Smile",
+  "Frown",
+  "Blink",
+  "Mouth open",
+  "Lips closed",
+  "Eyebrows raised",
+  "Turn left",
+  "Turn right",
+  "Tilt up",
+  "Tilt down",
+  "Tilt side to side",
+];
+
+const clamp = (value: number, min: number, max: number) =>
+  Math.min(max, Math.max(min, value));
+
+const blendModeToComposite: Record<BlendMode, GlobalCompositeOperation> = {
+  normal: "source-over",
+  multiply: "multiply",
+  screen: "screen",
+  overlay: "overlay",
+  "soft-light": "soft-light",
+};
+
+const MODEL_PATH = "/mediapipe/models/face_landmarker.task";
+
+function loadImage(url: string) {
+  return new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = reject;
+    image.src = url;
+  });
+}
+
+function friendlyErrorMessage(err: unknown, fallback: string) {
+  if (!(err instanceof Error)) return fallback;
+  if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
+    return "Camera permission was blocked. Allow camera access in the browser, then start the camera again.";
+  }
+  if (err.name === "NotFoundError" || err.name === "DevicesNotFoundError") {
+    return "No webcam was found. Connect a camera or choose another browser camera source.";
+  }
+  if (err.message.toLowerCase().includes("fetch")) {
+    return "Face tracking model failed to load. The app now expects the local model at /mediapipe/models/face_landmarker.task.";
+  }
+  return err.message || fallback;
+}
+
+function drawWatermark(ctx: CanvasRenderingContext2D, width: number, height: number) {
+  const padding = Math.max(18, width * 0.018);
+  ctx.save();
+  ctx.font = `700 ${Math.max(18, width * 0.018)}px Inter, system-ui, sans-serif`;
+  const textWidth = ctx.measureText(EXPORT_WATERMARK).width;
+  const boxWidth = textWidth + padding * 1.3;
+  const boxHeight = padding * 1.7;
+  const x = width - boxWidth - padding;
+  const y = height - boxHeight - padding;
+  ctx.globalAlpha = 0.88;
+  ctx.fillStyle = "rgba(16, 20, 14, 0.78)";
+  ctx.fillRect(x, y, boxWidth, boxHeight);
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = "#f1d28a";
+  ctx.fillText(EXPORT_WATERMARK, x + padding * 0.65, y + boxHeight * 0.65);
+  ctx.restore();
+}
+
+function landmarkBounds(points: NormalizedLandmark[], width: number, height: number) {
+  let minX = Number.POSITIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxX = 0;
+  let maxY = 0;
+
+  FACE_OVAL.forEach((index) => {
+    const point = points[index];
+    minX = Math.min(minX, point.x * width);
+    minY = Math.min(minY, point.y * height);
+    maxX = Math.max(maxX, point.x * width);
+    maxY = Math.max(maxY, point.y * height);
+  });
+
+  return { minX, minY, maxX, maxY, width: maxX - minX, height: maxY - minY };
+}
+
+function drawLandmarkPath(
+  ctx: CanvasRenderingContext2D,
+  points: NormalizedLandmark[],
+  indexes: number[],
+  width: number,
+  height: number,
+  closed = true,
+) {
+  ctx.beginPath();
+  indexes.forEach((index, position) => {
+    const point = points[index];
+    const x = point.x * width;
+    const y = point.y * height;
+    if (position === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+  if (closed) ctx.closePath();
+  ctx.stroke();
+}
+
+function drawClosedLandmarkFill(
+  ctx: CanvasRenderingContext2D,
+  points: Point[],
+  indexes: number[],
+) {
+  ctx.beginPath();
+  indexes.forEach((index, position) => {
+    const point = points[index];
+    if (position === 0) ctx.moveTo(point.x, point.y);
+    else ctx.lineTo(point.x, point.y);
+  });
+  ctx.closePath();
+  ctx.fill();
+}
+
+function toPixelPoint(point: NormalizedLandmark, width: number, height: number): Point {
+  return { x: point.x * width, y: point.y * height };
+}
+
+function transformTargetLandmarks(
+  points: NormalizedLandmark[],
+  width: number,
+  height: number,
+  scalePercent: number,
+  offsetPercent: number,
+) {
+  const bounds = landmarkBounds(points, width, height);
+  const scaleFactor = scalePercent / 100;
+  const centerX = bounds.minX + bounds.width / 2;
+  const centerY = bounds.minY + bounds.height / 2;
+  const targetCenterY = centerY + (offsetPercent / 100) * bounds.height;
+
+  return points.map((point) => {
+    const x = point.x * width;
+    const y = point.y * height;
+    return {
+      x: centerX + (x - centerX) * scaleFactor,
+      y: targetCenterY + (y - centerY) * scaleFactor,
+    };
+  });
+}
+
+function drawTriangleImagePatch(
+  ctx: CanvasRenderingContext2D,
+  image: HTMLImageElement,
+  source: [Point, Point, Point],
+  target: [Point, Point, Point],
+) {
+  const [s0, s1, s2] = source;
+  const [d0, d1, d2] = target;
+  const denominator =
+    s0.x * (s1.y - s2.y) + s1.x * (s2.y - s0.y) + s2.x * (s0.y - s1.y);
+
+  if (Math.abs(denominator) < 0.001) return;
+
+  const a =
+    (d0.x * (s1.y - s2.y) + d1.x * (s2.y - s0.y) + d2.x * (s0.y - s1.y)) /
+    denominator;
+  const b =
+    (d0.y * (s1.y - s2.y) + d1.y * (s2.y - s0.y) + d2.y * (s0.y - s1.y)) /
+    denominator;
+  const c =
+    (d0.x * (s2.x - s1.x) + d1.x * (s0.x - s2.x) + d2.x * (s1.x - s0.x)) /
+    denominator;
+  const d =
+    (d0.y * (s2.x - s1.x) + d1.y * (s0.x - s2.x) + d2.y * (s1.x - s0.x)) /
+    denominator;
+  const e =
+    (d0.x * (s1.x * s2.y - s2.x * s1.y) +
+      d1.x * (s2.x * s0.y - s0.x * s2.y) +
+      d2.x * (s0.x * s1.y - s1.x * s0.y)) /
+    denominator;
+  const f =
+    (d0.y * (s1.x * s2.y - s2.x * s1.y) +
+      d1.y * (s2.x * s0.y - s0.x * s2.y) +
+      d2.y * (s0.x * s1.y - s1.x * s0.y)) /
+    denominator;
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(d0.x, d0.y);
+  ctx.lineTo(d1.x, d1.y);
+  ctx.lineTo(d2.x, d2.y);
+  ctx.closePath();
+  ctx.clip();
+  ctx.setTransform(a, b, c, d, e, f);
+  ctx.drawImage(image, 0, 0);
+  ctx.restore();
+}
+
+function drawWarpedFaceMesh(
+  ctx: CanvasRenderingContext2D,
+  video: HTMLVideoElement,
+  photo: PhotoAsset,
+  targetPoints: Point[],
+  opacity: number,
+  blendMode: BlendMode,
+  edgeSoftness: number,
+  lightingStrength: number,
+) {
+  if (!photo.mesh) return false;
+
+  const canvas = ctx.canvas;
+  const width = canvas.width;
+  const height = canvas.height;
+  const layer = document.createElement("canvas");
+  const layerCtx = layer.getContext("2d");
+  const mask = document.createElement("canvas");
+  const maskCtx = mask.getContext("2d");
+  if (!layerCtx || !maskCtx) return false;
+
+  layer.width = width;
+  layer.height = height;
+  mask.width = width;
+  mask.height = height;
+
+  const imageWidth = photo.image.naturalWidth || photo.image.width;
+  const imageHeight = photo.image.naturalHeight || photo.image.height;
+  const sourcePoints = photo.mesh.landmarks.map((point) =>
+    toPixelPoint(point, imageWidth, imageHeight),
+  );
+
+  for (let index = 0; index < photo.mesh.triangles.length; index += 3) {
+    const a = photo.mesh.triangles[index];
+    const b = photo.mesh.triangles[index + 1];
+    const c = photo.mesh.triangles[index + 2];
+    const sourceTriangle: [Point, Point, Point] = [
+      sourcePoints[a],
+      sourcePoints[b],
+      sourcePoints[c],
+    ];
+    const targetTriangle: [Point, Point, Point] = [
+      targetPoints[a],
+      targetPoints[b],
+      targetPoints[c],
+    ];
+    drawTriangleImagePatch(layerCtx, photo.image, sourceTriangle, targetTriangle);
+  }
+
+  maskCtx.save();
+  maskCtx.filter = `blur(${edgeSoftness}px)`;
+  maskCtx.fillStyle = "#fff";
+  drawClosedLandmarkFill(maskCtx, targetPoints, FACE_OVAL);
+  maskCtx.restore();
+
+  layerCtx.save();
+  layerCtx.globalCompositeOperation = "destination-in";
+  layerCtx.drawImage(mask, 0, 0);
+  layerCtx.restore();
+
+  const featureFade = clamp(edgeSoftness / 22, 0.35, 0.82);
+  layerCtx.save();
+  layerCtx.globalCompositeOperation = "destination-out";
+  layerCtx.filter = `blur(${Math.max(3, edgeSoftness * 0.34)}px)`;
+  layerCtx.fillStyle = `rgba(0, 0, 0, ${featureFade})`;
+  drawClosedLandmarkFill(layerCtx, targetPoints, LEFT_EYE);
+  drawClosedLandmarkFill(layerCtx, targetPoints, RIGHT_EYE);
+  drawClosedLandmarkFill(layerCtx, targetPoints, LIPS);
+  layerCtx.restore();
+
+  if (lightingStrength > 0) {
+    layerCtx.save();
+    layerCtx.globalCompositeOperation = "soft-light";
+    layerCtx.globalAlpha = lightingStrength / 100;
+    layerCtx.filter = "grayscale(1) contrast(1.34) brightness(0.96)";
+    layerCtx.drawImage(video, 0, 0, width, height);
+    layerCtx.restore();
+
+    layerCtx.save();
+    layerCtx.globalCompositeOperation = "destination-in";
+    layerCtx.drawImage(mask, 0, 0);
+    layerCtx.restore();
+  }
+
+  ctx.save();
+  ctx.globalAlpha = opacity / 100;
+  ctx.globalCompositeOperation = blendModeToComposite[blendMode];
+  ctx.drawImage(layer, 0, 0);
+  ctx.restore();
+  return true;
+}
+
+function App() {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const sourcePreviewRef = useRef<HTMLVideoElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const rafRef = useRef<number | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const landmarkerRef = useRef<FaceLandmarker | null>(null);
+  const sourceLandmarkerRef = useRef<FaceLandmarker | null>(null);
+  const wasmFilesetRef = useRef<Awaited<ReturnType<typeof FilesetResolver.forVisionTasks>> | null>(
+    null,
+  );
+  const lastVideoTimeRef = useRef(-1);
+  const lastResultRef = useRef<FaceLandmarkerResult | null>(null);
+  const lastPerformanceRef = useRef<FacialPerformance | null>(null);
+  const fpsTimesRef = useRef<number[]>([]);
+  const photosRef = useRef<PhotoAsset[]>([]);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const recordingChunksRef = useRef<BlobPart[]>([]);
+  const hiddenAtRef = useRef<number | null>(null);
+
+  const [step, setStep] = useState<AppStep>("welcome");
+  const [abuseNoticeAccepted, setAbuseNoticeAccepted] = useState(false);
+  const [permissionConsent, setPermissionConsent] = useState(false);
+  const [publicFigureConsent, setPublicFigureConsent] = useState(false);
+  const [minorConsent, setMinorConsent] = useState(false);
+  const [consentRecord, setConsentRecord] = useState<ConsentRecord | null>(null);
+  const [sessionAudit, setSessionAudit] = useState<SessionAuditRecord | null>(null);
+  const [photos, setPhotos] = useState<PhotoAsset[]>([]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
+  const [selectedDeviceId, setSelectedDeviceId] = useState("");
+  const [showOriginal, setShowOriginal] = useState(true);
+  const [calibrationIndex, setCalibrationIndex] = useState(0);
+  const [calibrationComplete, setCalibrationComplete] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [recordingUrl, setRecordingUrl] = useState<string | null>(null);
+  const [recordingMetadata, setRecordingMetadata] = useState<string | null>(null);
+  const [cameraOn, setCameraOn] = useState(false);
+  const [isLoadingModel, setIsLoadingModel] = useState(false);
+  const [status, setStatus] = useState("Camera idle");
+  const [fps, setFps] = useState(0);
+  const [perfStats, setPerfStats] = useState<PerformanceStats>({
+    fps: 0,
+    inferenceMs: 0,
+    renderMs: 0,
+    droppedFrames: 0,
+    memoryMb: null,
+  });
+  const [facialPerformance, setFacialPerformance] = useState<FacialPerformance | null>(null);
+  const [opacity, setOpacity] = useState(92);
+  const [scale, setScale] = useState(109);
+  const [offsetY, setOffsetY] = useState(-2);
+  const [edgeSoftness, setEdgeSoftness] = useState(18);
+  const [lightingStrength, setLightingStrength] = useState(42);
+  const [smoothing, setSmoothing] = useState(45);
+  const [rotation, setRotation] = useState(true);
+  const [mirror, setMirror] = useState(true);
+  const [debug, setDebug] = useState(false);
+  const [blendMode, setBlendMode] = useState<BlendMode>("soft-light");
+  const [overlayMode, setOverlayMode] = useState<OverlayMode>("mesh");
+  const [error, setError] = useState<string | null>(null);
+
+  const selectedPhoto = useMemo(
+    () => photos.find((photo) => photo.id === selectedId) ?? null,
+    [photos, selectedId],
+  );
+  const selectedPhotoStatus = selectedPhoto
+    ? `${selectedPhoto.name} · ${
+        selectedPhoto.meshStatus === "ready" ? "mesh warp" : "flat fallback"
+      }`
+    : "No active photo";
+
+  useEffect(() => {
+    return () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      streamRef.current?.getTracks().forEach((track) => track.stop());
+      photosRef.current.forEach((photo) => URL.revokeObjectURL(photo.url));
+      if (recordingUrl) URL.revokeObjectURL(recordingUrl);
+      landmarkerRef.current?.close();
+      sourceLandmarkerRef.current?.close();
+    };
+  }, [recordingUrl]);
+
+  useEffect(() => {
+    photosRef.current = photos;
+  }, [photos]);
+
+  useEffect(() => {
+    navigator.mediaDevices
+      ?.enumerateDevices()
+      .then((items) => {
+        const videoInputs = items.filter((item) => item.kind === "videoinput");
+        setDevices(videoInputs);
+        setSelectedDeviceId((current) => current || videoInputs[0]?.deviceId || "");
+      })
+      .catch(() => setDevices([]));
+  }, [cameraOn]);
+
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.hidden && cameraOn) {
+        hiddenAtRef.current = Date.now();
+        stopCamera();
+        setStatus("Paused while tab is hidden");
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
+  }, [cameraOn]);
+
+  const ensureFileset = useCallback(async () => {
+    if (!wasmFilesetRef.current) {
+      wasmFilesetRef.current = await FilesetResolver.forVisionTasks("/mediapipe/wasm");
+    }
+    return wasmFilesetRef.current;
+  }, []);
+
+  const ensureLandmarker = useCallback(async () => {
+    if (landmarkerRef.current) return landmarkerRef.current;
+    setIsLoadingModel(true);
+    setStatus("Loading face tracker");
+    const fileset = await ensureFileset();
+    const landmarker = await FaceLandmarker.createFromOptions(fileset, {
+      baseOptions: {
+        modelAssetPath: MODEL_PATH,
+        delegate: "GPU",
+      },
+      runningMode: "VIDEO",
+      numFaces: 1,
+      outputFaceBlendshapes: true,
+      outputFacialTransformationMatrixes: true,
+    });
+    landmarkerRef.current = landmarker;
+    setIsLoadingModel(false);
+    return landmarker;
+  }, [ensureFileset]);
+
+  const ensureSourceLandmarker = useCallback(async () => {
+    if (sourceLandmarkerRef.current) return sourceLandmarkerRef.current;
+    const fileset = await ensureFileset();
+    const landmarker = await FaceLandmarker.createFromOptions(fileset, {
+      baseOptions: {
+        modelAssetPath: MODEL_PATH,
+        delegate: "CPU",
+      },
+      runningMode: "IMAGE",
+      numFaces: 1,
+      outputFaceBlendshapes: true,
+      outputFacialTransformationMatrixes: false,
+    });
+    sourceLandmarkerRef.current = landmarker;
+    return landmarker;
+  }, [ensureFileset]);
+
+  const analyzePhotoMesh = useCallback(
+    async (image: HTMLImageElement): Promise<Pick<PhotoAsset, "mesh" | "meshStatus">> => {
+      try {
+        const landmarker = await ensureSourceLandmarker();
+        const result = landmarker.detect(image);
+        const faceCount = result.faceLandmarks?.length ?? 0;
+        const landmarks = result.faceLandmarks?.[0];
+        if (!landmarks) return { mesh: null, meshStatus: "no-face" };
+        if (faceCount > 1) return { mesh: null, meshStatus: "multiple-faces" };
+
+        const landmarkValidation = validateFaceLandmarks(faceCount, landmarks);
+        if (!landmarkValidation.valid) {
+          const isSideProfile = landmarkValidation.errors.some((item) => item.includes("side profile"));
+          return { mesh: null, meshStatus: isSideProfile ? "side-profile" : "error" };
+        }
+
+        const points = landmarks.map((point) => [point.x, point.y] as [number, number]);
+        const triangles = Array.from(Delaunator.from(points).triangles);
+        return { mesh: { landmarks, triangles }, meshStatus: "ready" };
+      } catch (err) {
+        console.error("Source photo mesh analysis failed", err);
+        return { mesh: null, meshStatus: "error" };
+      }
+    },
+    [ensureSourceLandmarker],
+  );
+
+  const drawFrame = useCallback(() => {
+    const renderStart = performance.now();
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext("2d");
+
+    if (!video || !canvas || !ctx || video.readyState < 2) {
+      rafRef.current = requestAnimationFrame(drawFrame);
+      return;
+    }
+
+    const width = video.videoWidth || 1280;
+    const height = video.videoHeight || 720;
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width;
+      canvas.height = height;
+    }
+
+    ctx.save();
+    ctx.clearRect(0, 0, width, height);
+    if (mirror) {
+      ctx.translate(width, 0);
+      ctx.scale(-1, 1);
+    }
+    ctx.drawImage(video, 0, 0, width, height);
+    ctx.restore();
+
+    const landmarker = landmarkerRef.current;
+    let inferenceMs = perfStats.inferenceMs;
+    if (landmarker && video.currentTime !== lastVideoTimeRef.current) {
+      lastVideoTimeRef.current = video.currentTime;
+      const inferenceStart = performance.now();
+      lastResultRef.current = landmarker.detectForVideo(video, performance.now());
+      inferenceMs = performance.now() - inferenceStart;
+    }
+
+    const face = lastResultRef.current?.faceLandmarks?.[0];
+    if (face) {
+      setStatus(selectedPhoto ? "Face locked" : "Face locked - upload a photo");
+      const mappedPerformance = mapBlendshapesToPerformance(
+        lastResultRef.current?.faceBlendshapes,
+        face,
+      );
+      const smoothedPerformance = smoothPerformance(
+        lastPerformanceRef.current,
+        mappedPerformance,
+        smoothing,
+      );
+      lastPerformanceRef.current = smoothedPerformance;
+      setFacialPerformance(smoothedPerformance);
+
+      const mappedFace = mirror
+        ? face.map((point) => ({ ...point, x: 1 - point.x }))
+        : face;
+      const bounds = landmarkBounds(mappedFace, width, height);
+      const targetPoints = transformTargetLandmarks(mappedFace, width, height, scale, offsetY);
+      const left = mappedFace[234];
+      const right = mappedFace[454];
+      const angle = rotation
+        ? Math.atan2((right.y - left.y) * height, (right.x - left.x) * width)
+        : 0;
+      const drawWidth = bounds.width * (scale / 100);
+      const drawHeight = bounds.height * (scale / 100);
+      const centerX = bounds.minX + bounds.width / 2;
+      const centerY = bounds.minY + bounds.height / 2 + (offsetY / 100) * bounds.height;
+
+      ctx.save();
+      ctx.translate(centerX, centerY);
+      ctx.rotate(angle);
+      if (selectedPhoto && overlayMode === "mesh" && selectedPhoto.mesh) {
+        ctx.restore();
+        drawWarpedFaceMesh(
+          ctx,
+          video,
+          selectedPhoto,
+          targetPoints,
+          opacity,
+          blendMode,
+          edgeSoftness,
+          lightingStrength,
+        );
+      } else if (selectedPhoto) {
+        ctx.globalAlpha = opacity / 100;
+        ctx.globalCompositeOperation = blendModeToComposite[blendMode];
+        ctx.drawImage(
+          selectedPhoto.image,
+          -drawWidth / 2,
+          -drawHeight / 2,
+          drawWidth,
+          drawHeight,
+        );
+        ctx.restore();
+      } else {
+        ctx.strokeStyle = "rgba(45, 212, 191, 0.72)";
+        ctx.lineWidth = 5;
+        ctx.setLineDash([14, 12]);
+        ctx.strokeRect(-drawWidth / 2, -drawHeight / 2, drawWidth, drawHeight);
+        ctx.restore();
+      }
+
+      if (debug) {
+        ctx.save();
+        ctx.strokeStyle = "rgba(45, 212, 191, 0.92)";
+        ctx.lineWidth = 2;
+        drawLandmarkPath(ctx, mappedFace, FACE_OVAL, width, height);
+        ctx.strokeStyle = "rgba(251, 191, 36, 0.92)";
+        drawLandmarkPath(ctx, mappedFace, LEFT_EYE, width, height);
+        drawLandmarkPath(ctx, mappedFace, RIGHT_EYE, width, height);
+        ctx.strokeStyle = "rgba(248, 113, 113, 0.92)";
+        drawLandmarkPath(ctx, mappedFace, LIPS, width, height);
+        ctx.restore();
+      }
+    } else if (cameraOn) {
+      setStatus("Searching for face");
+      if (lastPerformanceRef.current) {
+        setFacialPerformance({
+          ...lastPerformanceRef.current,
+          trackingConfidence: Math.max(0, lastPerformanceRef.current.trackingConfidence - 0.08),
+        });
+      }
+    }
+
+    drawWatermark(ctx, width, height);
+
+    const now = performance.now();
+    fpsTimesRef.current = fpsTimesRef.current.filter((time) => now - time < 1000);
+    fpsTimesRef.current.push(now);
+    const nextFps = fpsTimesRef.current.length;
+    const renderMs = now - renderStart;
+    const memory = performance as Performance & { memory?: { usedJSHeapSize: number } };
+    const memoryMb = memory.memory ? Math.round(memory.memory.usedJSHeapSize / 1024 / 1024) : null;
+    const droppedFrame = renderMs > 42 ? 1 : 0;
+    setFps(nextFps);
+    setPerfStats((current) => ({
+      fps: nextFps,
+      inferenceMs: Math.round(inferenceMs),
+      renderMs: Math.round(renderMs),
+      droppedFrames: current.droppedFrames + droppedFrame,
+      memoryMb,
+    }));
+    rafRef.current = requestAnimationFrame(drawFrame);
+  }, [
+    blendMode,
+    cameraOn,
+    debug,
+    edgeSoftness,
+    lightingStrength,
+    mirror,
+    offsetY,
+    opacity,
+    overlayMode,
+    perfStats.inferenceMs,
+    rotation,
+    scale,
+    selectedPhoto,
+    smoothing,
+  ]);
+
+  const startCamera = useCallback(async () => {
+    try {
+      setError(null);
+      await ensureLandmarker();
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          deviceId: selectedDeviceId ? { exact: selectedDeviceId } : undefined,
+          facingMode: "user",
+        },
+        audio: false,
+      });
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+      }
+      if (sourcePreviewRef.current) {
+        sourcePreviewRef.current.srcObject = stream;
+        await sourcePreviewRef.current.play();
+      }
+      setCameraOn(true);
+      setStep((current) => (current === "camera" ? "live" : current));
+      setStatus("Searching for face");
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      rafRef.current = requestAnimationFrame(drawFrame);
+    } catch (err) {
+      setError(friendlyErrorMessage(err, "Camera failed to start"));
+      setStatus("Camera blocked");
+      setCameraOn(false);
+      setIsLoadingModel(false);
+    }
+  }, [drawFrame, ensureLandmarker, selectedDeviceId]);
+
+  const stopCamera = useCallback(() => {
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    rafRef.current = null;
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
+    if (videoRef.current) videoRef.current.srcObject = null;
+    if (sourcePreviewRef.current) sourcePreviewRef.current.srcObject = null;
+    setCameraOn(false);
+    setStatus("Camera idle");
+    setFps(0);
+  }, []);
+
+  const handleUpload = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (!permissionConsent || !publicFigureConsent || !minorConsent) {
+      setError("Confirm consent and responsible-use requirements before uploading a face photo.");
+      event.target.value = "";
+      return;
+    }
+
+    const files = Array.from(event.target.files ?? []);
+    if (files.length === 0) return;
+    if (files.length > 1) {
+      setError("Upload one face photo at a time for this MVP.");
+      event.target.value = "";
+      return;
+    }
+
+    const record =
+      consentRecord ??
+      createConsentRecord({
+        photoName: files[0].name,
+        ownsOrHasPermission: permissionConsent,
+        notPublicFigure: publicFigureConsent,
+        notMinorWithoutConsent: minorConsent,
+      });
+    setConsentRecord(record);
+    if (!sessionAudit) {
+      setSessionAudit(createSessionAudit(record.id));
+    }
+
+    const loaded = await Promise.all(
+      files.map(async (file) => {
+        const fileValidation = validateImageFile(file);
+        if (!fileValidation.valid) {
+          throw new Error(fileValidation.errors.join(" "));
+        }
+        const url = URL.createObjectURL(file);
+        const image = await loadImage(url);
+        const dimensionValidation = validateImageDimensions(
+          image.naturalWidth || image.width,
+          image.naturalHeight || image.height,
+        );
+        const basicValidation = combineValidationResults(fileValidation, dimensionValidation);
+        if (!basicValidation.valid) {
+          URL.revokeObjectURL(url);
+          throw new Error(basicValidation.errors.join(" "));
+        }
+        const meshResult = await analyzePhotoMesh(image);
+        if (meshResult.meshStatus !== "ready") {
+          URL.revokeObjectURL(url);
+          throw new Error(
+            meshResult.meshStatus === "multiple-faces"
+              ? "Exactly one face is required."
+              : meshResult.meshStatus === "side-profile"
+                ? "Use a clear front-facing image, not a side profile."
+                : "No usable face mesh was detected.",
+          );
+        }
+        return {
+          id: crypto.randomUUID(),
+          name: file.name,
+          url,
+          image,
+          consentTimestamp: record.confirmedAt,
+          validationWarnings: basicValidation.warnings,
+          ...meshResult,
+        };
+      }),
+    ).catch((err) => {
+      setError(friendlyErrorMessage(err, "Upload failed"));
+      return [];
+    });
+
+    setPhotos((current) => [...current, ...loaded]);
+    setSelectedId((current) => current ?? loaded[0]?.id ?? null);
+    if (loaded.length > 0) {
+      setStep("camera");
+      setError(null);
+    }
+    event.target.value = "";
+  }, [
+    analyzePhotoMesh,
+    consentRecord,
+    minorConsent,
+    permissionConsent,
+    publicFigureConsent,
+    sessionAudit,
+  ]);
+
+  const takeSnapshot = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const link = document.createElement("a");
+    link.download = `about-face-ai-generated-${new Date().toISOString().replace(/[:.]/g, "-")}.png`;
+    link.href = canvas.toDataURL("image/png");
+    link.click();
+  }, []);
+
+  const startRecording = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !browserSupportsCanvasRecording(canvas)) {
+      setError("This browser cannot record the canvas preview. Use current Chrome or Edge.");
+      return;
+    }
+    if (recordingUrl) {
+      URL.revokeObjectURL(recordingUrl);
+      setRecordingUrl(null);
+    }
+    recordingChunksRef.current = [];
+    const stream = canvas.captureStream(30);
+    const recorder = new MediaRecorder(stream, { mimeType: "video/webm" });
+    recorder.ondataavailable = (event) => {
+      if (event.data.size > 0) recordingChunksRef.current.push(event.data);
+    };
+    recorder.onstop = () => {
+      const blob = new Blob(recordingChunksRef.current, { type: "video/webm" });
+      const url = URL.createObjectURL(blob);
+      setRecordingUrl(url);
+      setRecordingMetadata(
+        JSON.stringify(createProvenanceMetadata(sessionAudit?.id ?? "local-session"), null, 2),
+      );
+      setRecording(false);
+      setStep("recording");
+    };
+    recorderRef.current = recorder;
+    recorder.start();
+    setRecording(true);
+    setStep("recording");
+  }, [recordingUrl, sessionAudit]);
+
+  const stopRecording = useCallback(() => {
+    if (recorderRef.current?.state === "recording") {
+      recorderRef.current.stop();
+    }
+  }, []);
+
+  const deleteRecording = useCallback(() => {
+    if (recordingUrl) URL.revokeObjectURL(recordingUrl);
+    setRecordingUrl(null);
+    setRecordingMetadata(null);
+    recordingChunksRef.current = [];
+  }, [recordingUrl]);
+
+  const downloadRecording = useCallback(() => {
+    if (!recordingUrl) return;
+    const link = document.createElement("a");
+    link.download = `about-face-ai-generated-${new Date().toISOString().replace(/[:.]/g, "-")}.webm`;
+    link.href = recordingUrl;
+    link.click();
+  }, [recordingUrl]);
+
+  const completeCalibrationStep = useCallback(() => {
+    setCalibrationIndex((current) => {
+      const next = current + 1;
+      if (next >= CALIBRATION_POSES.length) {
+        setCalibrationComplete(true);
+        setStep("live");
+        return current;
+      }
+      return next;
+    });
+  }, []);
+
+  const reportUnauthorizedUse = useCallback(() => {
+    submitLocalReport(
+      "unauthorized-likeness",
+      "User opened the report/removal workflow from the MVP interface.",
+    );
+    setError("Report saved locally. Production should route this to a staffed removal queue.");
+  }, []);
+
+  const deleteAllData = useCallback(() => {
+    stopCamera();
+    photosRef.current.forEach((photo) => URL.revokeObjectURL(photo.url));
+    deleteRecording();
+    setPhotos([]);
+    setSelectedId(null);
+    setConsentRecord(null);
+    setSessionAudit(null);
+    setPermissionConsent(false);
+    setPublicFigureConsent(false);
+    setMinorConsent(false);
+    deleteAllLocalData();
+    setStatus("Local data deleted");
+    setStep("welcome");
+  }, [deleteRecording, stopCamera]);
+
+  const resetControls = useCallback(() => {
+    setOpacity(92);
+    setScale(109);
+    setOffsetY(-2);
+    setEdgeSoftness(18);
+    setLightingStrength(42);
+    setRotation(true);
+    setMirror(true);
+    setDebug(false);
+    setBlendMode("soft-light");
+    setOverlayMode("mesh");
+  }, []);
+
+  const storageStatus = getSecureStorageStatus();
+  const canUpload = permissionConsent && publicFigureConsent && minorConsent;
+
+  if (step === "welcome") {
+    return (
+      <main className="welcome-shell">
+        <section className="welcome-panel">
+          <div className="brand-row large">
+            <div className="brand-mark"><Sparkles size={24} /></div>
+            <div>
+              <h1>About Face</h1>
+              <p>Turn. Transform. Stay in control.</p>
+            </div>
+          </div>
+          <h2>Animate a permitted face photo with your own facial movement.</h2>
+          <p>
+            This MVP runs in your browser with MediaPipe face tracking. Webcam frames are not uploaded,
+            and the first renderer is mesh-based, so expect believable alignment rather than perfect photorealism.
+          </p>
+          <div className="notice">
+            <ShieldCheck size={18} />
+            <span>Only use images you own or have permission to use. No voice cloning or identity-check bypass tools are included.</span>
+          </div>
+          <button className="button primary hero-action" onClick={() => setStep("upload")}>
+            Create an Avatar
+          </button>
+        </section>
+      </main>
+    );
+  }
+
+  return (
+    <main className="app-shell">
+      <aside className="side-panel asset-panel">
+        <div className="brand-row">
+          <div className="brand-mark"><Sparkles size={18} /></div>
+          <div>
+            <h1>About Face</h1>
+            <p>Turn. Transform. Stay in control.</p>
+          </div>
+        </div>
+
+        <nav className="step-nav">
+          {(["upload", "camera", "live", "recording", "privacy"] as AppStep[]).map((item) => (
+            <button
+              key={item}
+              className={step === item ? "active" : ""}
+              onClick={() => setStep(item)}
+              disabled={item !== "upload" && photos.length === 0}
+            >
+              {item}
+            </button>
+          ))}
+        </nav>
+
+        <section className="mini-panel">
+          <h2>Reference face</h2>
+          <label className={`upload-drop ${!canUpload ? "disabled" : ""}`}>
+            <ImagePlus size={20} />
+            <span>Upload face photo</span>
+            <small>JPG, PNG, WebP. One clear front-facing face.</small>
+            <input type="file" accept="image/jpeg,image/png,image/webp" onChange={handleUpload} disabled={!canUpload} />
+          </label>
+        </section>
+
+        <div className="asset-list">
+          {photos.length === 0 ? (
+            <div className="empty-state">No avatar photo loaded yet.</div>
+          ) : (
+            photos.map((photo) => (
+              <button
+                className={`asset-item ${photo.id === selectedId ? "selected" : ""}`}
+                key={photo.id}
+                onClick={() => setSelectedId(photo.id)}
+              >
+                <img src={photo.url} alt="" />
+                <span>
+                  {photo.name}
+                  <small>{photo.meshStatus === "ready" ? "Mesh ready" : photo.meshStatus}</small>
+                </span>
+              </button>
+            ))
+          )}
+        </div>
+      </aside>
+
+      <section className="stage">
+        <header className="stage-header">
+          <div>
+            <h2>
+              {step === "upload" && "Upload and consent"}
+              {step === "camera" && "Camera setup and calibration"}
+              {step === "live" && "Live transformation"}
+              {step === "recording" && "Recording"}
+              {step === "privacy" && "Privacy settings"}
+            </h2>
+            <p>{storageStatus.message}</p>
+          </div>
+          <div className="camera-actions">
+            {cameraOn ? (
+              <button className="button secondary" onClick={stopCamera}><CameraOff size={18} />Stop</button>
+            ) : (
+              <button className="button primary" onClick={startCamera} disabled={isLoadingModel || photos.length === 0}>
+                <Camera size={18} />{isLoadingModel ? "Loading" : "Start camera"}
+              </button>
+            )}
+            <button className="button secondary" onClick={takeSnapshot} disabled={!cameraOn}><Download size={18} />Snapshot</button>
+          </div>
+        </header>
+
+        {step === "upload" && (
+          <div className="flow-panel">
+            <div className="notice danger">
+              <OctagonAlert size={18} />
+              <span>Do not use About Face to deceive, harass, defraud, impersonate without permission, create sexual content, interfere with elections, or bypass identity checks.</span>
+            </div>
+            <Toggle label="I own this image or have permission from the person shown." checked={permissionConsent} onChange={setPermissionConsent} />
+            <Toggle label="This is not a celebrity, politician, public figure, or recognizable public personality." checked={publicFigureConsent} onChange={setPublicFigureConsent} />
+            <Toggle label="This does not involve a minor unless I have verified parental consent." checked={minorConsent} onChange={setMinorConsent} />
+            <Toggle label="I understand this MVP adds a visible AI-Generated watermark." checked={abuseNoticeAccepted} onChange={setAbuseNoticeAccepted} />
+            {!canUpload && <p className="helper-text">Confirm the three required checks to enable upload.</p>}
+          </div>
+        )}
+
+        {step !== "upload" && (
+          <div className={`preview-grid ${showOriginal ? "" : "single"}`}>
+            {showOriginal && (
+              <div className="camera-frame compact">
+                <video ref={sourcePreviewRef} playsInline muted />
+                {!cameraOn && <div className="camera-placeholder"><Camera size={32} /><strong>Original preview</strong></div>}
+              </div>
+            )}
+            <div className="camera-frame">
+              <video ref={videoRef} playsInline muted />
+              <canvas ref={canvasRef} />
+              {!cameraOn && (
+                <div className="camera-placeholder">
+                  <Camera size={42} />
+                  <strong>Avatar preview is off</strong>
+                  <span>Start the camera to track head, eyes, brows, mouth, smile, and basic expressions.</span>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {step === "camera" && (
+          <div className="flow-panel horizontal">
+            <label className="select-row">
+              <span>Webcam</span>
+              <select value={selectedDeviceId} onChange={(event) => setSelectedDeviceId(event.target.value)}>
+                {devices.length === 0 ? <option value="">Default camera</option> : devices.map((device, index) => (
+                  <option key={device.deviceId} value={device.deviceId}>{device.label || `Camera ${index + 1}`}</option>
+                ))}
+              </select>
+            </label>
+            <div className="calibration-card">
+              <strong>Calibration</strong>
+              <span>{calibrationComplete ? "Complete" : `Pose ${calibrationIndex + 1} of ${CALIBRATION_POSES.length}: ${CALIBRATION_POSES[calibrationIndex]}`}</span>
+              <button className="button secondary" onClick={completeCalibrationStep} disabled={!cameraOn}>
+                {calibrationComplete ? "Recheck pose" : "Capture pose"}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {step === "recording" && (
+          <div className="flow-panel recording-panel">
+            <div className="camera-actions">
+              {recording ? (
+                <button className="button primary" onClick={stopRecording}><Square size={17} />Stop recording</button>
+              ) : (
+                <button className="button primary" onClick={startRecording} disabled={!cameraOn}><Play size={17} />Start recording</button>
+              )}
+              <button className="button secondary" onClick={downloadRecording} disabled={!recordingUrl}><Download size={17} />Download</button>
+              <button className="button secondary" onClick={deleteRecording} disabled={!recordingUrl}><Trash2 size={17} />Delete</button>
+            </div>
+            {recordingUrl && <video className="recording-preview" src={recordingUrl} controls />}
+            {recordingMetadata && <pre className="metadata-box">{recordingMetadata}</pre>}
+          </div>
+        )}
+
+        {step === "privacy" && (
+          <div className="flow-panel">
+            <div className="notice"><Info size={18} /><span>Local mode: webcam frames stay in the browser. Uploaded references are object URLs in this session unless future Supabase upload is enabled.</span></div>
+            <button className="button secondary" onClick={reportUnauthorizedUse}>Report unauthorized likeness use</button>
+            <button className="button secondary" onClick={deleteAllData}><Trash2 size={17} />Delete all my local data</button>
+          </div>
+        )}
+
+        {error && <div className="error-strip">{error}</div>}
+
+        <footer className="status-bar">
+          <span className={`status-dot ${status.includes("locked") ? "active" : ""}`} />
+          <span>{status}</span>
+          <span>{fps} FPS</span>
+          <span>{perfStats.inferenceMs}ms inference</span>
+          <span>{perfStats.renderMs}ms render</span>
+          <span>{perfStats.droppedFrames} dropped</span>
+          <span>{perfStats.memoryMb ?? "n/a"} MB</span>
+          <span>{selectedPhotoStatus}</span>
+        </footer>
+      </section>
+
+      <aside className="side-panel controls-panel">
+        <div className="panel-title"><SlidersHorizontal size={19} /><h2>Avatar controls</h2></div>
+        <ControlSlider label="Realism strength" value={opacity} min={15} max={100} onChange={setOpacity} />
+        <ControlSlider label="Scale" value={scale} min={70} max={170} onChange={setScale} />
+        <ControlSlider label="Vertical offset" value={offsetY} min={-35} max={35} onChange={setOffsetY} />
+        <ControlSlider label="Edge softness" value={edgeSoftness} min={0} max={34} onChange={setEdgeSoftness} />
+        <ControlSlider label="Live lighting" value={lightingStrength} min={0} max={85} onChange={setLightingStrength} />
+        <ControlSlider label="Expression smoothing" value={smoothing} min={0} max={100} onChange={setSmoothing} />
+
+        <label className="select-row">
+          <span>Overlay mode</span>
+          <select value={overlayMode} onChange={(event) => setOverlayMode(event.target.value as OverlayMode)}>
+            <option value="mesh">Mesh warp</option>
+            <option value="flat">Flat photo</option>
+          </select>
+        </label>
+        <label className="select-row">
+          <span>Blend mode</span>
+          <select value={blendMode} onChange={(event) => setBlendMode(event.target.value as BlendMode)}>
+            <option value="normal">Normal</option>
+            <option value="multiply">Multiply</option>
+            <option value="screen">Screen</option>
+            <option value="overlay">Overlay</option>
+            <option value="soft-light">Soft light</option>
+          </select>
+        </label>
+
+        <Toggle label="Show original preview" checked={showOriginal} onChange={setShowOriginal} />
+        <Toggle label="Mirror preview" checked={mirror} onChange={setMirror} />
+        <Toggle label="Follow head tilt" checked={rotation} onChange={setRotation} />
+        <Toggle label="Landmark debug" checked={debug} onChange={setDebug} icon={debug ? Eye : EyeOff} />
+
+        <button className="button full secondary" onClick={resetControls}><RefreshCw size={17} />Reset controls</button>
+        <div className="performance-panel">
+          <h3>Facial performance</h3>
+          <Metric label="Pitch" value={facialPerformance?.headPose.pitch ?? 0} />
+          <Metric label="Yaw" value={facialPerformance?.headPose.yaw ?? 0} />
+          <Metric label="Roll" value={facialPerformance?.headPose.roll ?? 0} />
+          <Metric label="Left blink" value={facialPerformance?.eyes.leftBlink ?? 0} />
+          <Metric label="Right blink" value={facialPerformance?.eyes.rightBlink ?? 0} />
+          <Metric label="Mouth open" value={facialPerformance?.mouth.open ?? 0} />
+          <Metric label="Smile L/R" value={((facialPerformance?.mouth.smileLeft ?? 0) + (facialPerformance?.mouth.smileRight ?? 0)) / 2} />
+          <Metric label="Confidence" value={facialPerformance?.trackingConfidence ?? 0} />
+        </div>
+        <div className="note">Renderer is mesh-based: stable motion, blinking, mouth cutouts, edge blend, and lighting match are prioritized over full neural photorealism.</div>
+      </aside>
+    </main>
+  );
+}
+
+function Metric({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="metric-row">
+      <span>{label}</span>
+      <strong>{value.toFixed(2)}</strong>
+    </div>
+  );
+}
+
+function ControlSlider({
+  label,
+  value,
+  min,
+  max,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  onChange: (value: number) => void;
+}) {
+  const percentage = ((value - min) / (max - min)) * 100;
+  return (
+    <label className="control-slider">
+      <span>
+        {label}
+        <strong>{value}</strong>
+      </span>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        value={value}
+        style={{ backgroundSize: `${clamp(percentage, 0, 100)}% 100%` }}
+        onChange={(event) => onChange(Number(event.target.value))}
+      />
+    </label>
+  );
+}
+
+function Toggle({
+  label,
+  checked,
+  onChange,
+  icon: Icon,
+}: {
+  label: string;
+  checked: boolean;
+  onChange: (value: boolean) => void;
+  icon?: React.ComponentType<{ size: number }>;
+}) {
+  return (
+    <label className="toggle-row">
+      <span>
+        {Icon && <Icon size={16} />}
+        {label}
+      </span>
+      <input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} />
+    </label>
+  );
+}
+
+createRoot(document.getElementById("root")!).render(<App />);
