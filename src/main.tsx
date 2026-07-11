@@ -1007,7 +1007,6 @@ function App() {
   const [showOriginal, setShowOriginal] = useState(true);
   const [calibrationIndex, setCalibrationIndex] = useState(0);
   const [calibrationComplete, setCalibrationComplete] = useState(false);
-  const [performanceConsent, setPerformanceConsent] = useState(false);
   const [calibrationProfile, setCalibrationProfile] = useState<FacialCalibrationProfile | null>(null);
   const [calibrationFrames, setCalibrationFrames] = useState<Partial<Record<CalibrationStepId, number>>>({});
   const [activeCalibrationStepId, setActiveCalibrationStepId] = useState<CalibrationStepId | null>(null);
@@ -1267,7 +1266,6 @@ function App() {
 
       if (
         step === "performance" &&
-        performanceConsent &&
         !calibrationComplete &&
         currentCalibrationStep.id !== "review" &&
         activeCalibrationStepId === currentCalibrationStep.id &&
@@ -1443,7 +1441,6 @@ function App() {
     opacity,
     overlayMode,
     perfStats.inferenceMs,
-    performanceConsent,
     rotation,
     scale,
     selectedPhoto,
@@ -1454,10 +1451,6 @@ function App() {
   const startCamera = useCallback(async () => {
     try {
       setError(null);
-      if (step === "performance" && !performanceConsent) {
-        setError("Consent is required before facial-performance capture can start.");
-        return;
-      }
       await ensureLandmarker();
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
@@ -1490,13 +1483,9 @@ function App() {
       setIsLoadingModel(false);
       return false;
     }
-  }, [drawFrame, ensureLandmarker, performanceConsent, readyToRenderTarget, selectedDeviceId, step]);
+  }, [drawFrame, ensureLandmarker, readyToRenderTarget, selectedDeviceId]);
 
   const startCalibrationPage = useCallback(async () => {
-    if (!performanceConsent) {
-      setError("Consent is required before facial-performance capture can start.");
-      return;
-    }
     setError(null);
     if (!cameraOn) {
       const started = await startCamera();
@@ -1506,7 +1495,7 @@ function App() {
       }
     }
     setActiveCalibrationStepId(currentCalibrationStep.id);
-  }, [cameraOn, currentCalibrationStep.id, performanceConsent, startCamera]);
+  }, [cameraOn, currentCalibrationStep.id, startCamera]);
 
   const stopCamera = useCallback(() => {
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
@@ -1839,7 +1828,6 @@ function App() {
     setCalibrationProfile(null);
     setCalibrationComplete(false);
     setNormalizedPerformance(null);
-    setPerformanceConsent(false);
     setSavedCalibrationEnabled(false);
     deleteEncryptedCalibrationProfile();
     deleteAllLocalData();
@@ -2041,57 +2029,7 @@ function App() {
         </header>
 
         {step === "performance" && (
-          <div className={`preview-grid performance-preview-grid ${showOriginal ? "" : "single"}`}>
-            {showOriginal && (
-              <div className="camera-frame compact performance-camera-frame">
-                <video ref={sourcePreviewRef} playsInline muted />
-                {!cameraOn && <div className="camera-placeholder"><Camera size={32} /><strong>Original preview</strong></div>}
-              </div>
-            )}
-            <div className="camera-frame performance-camera-frame">
-              <video ref={videoRef} playsInline muted />
-              <canvas
-                ref={canvasRef}
-                className={blendPenEnabled ? "blend-pen-active" : ""}
-                onPointerDown={(event) => {
-                  if (!blendPenEnabled) return;
-                  event.currentTarget.setPointerCapture(event.pointerId);
-                  beginBlendPenStroke();
-                  addBlendPenPoint(event);
-                }}
-                onPointerMove={(event) => {
-                  if (!blendPenEnabled || event.buttons !== 1) return;
-                  addBlendPenPoint(event);
-                }}
-              />
-              {!cameraOn && (
-                <div className="camera-placeholder">
-                  <Camera size={42} />
-                  <strong>Camera view is off</strong>
-                  <span>Check consent, then click Start this step to begin capture.</span>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {step === "performance" && (
           <div className="flow-panel performance-capture-panel">
-            <div className="notice">
-              <Info size={18} />
-              <span>
-                About Face measures how your face moves so it can transfer your expressions to your selected target face.
-                This process does not identify you or verify your identity.
-              </span>
-            </div>
-            <label className="consent-line">
-              <input
-                type="checkbox"
-                checked={performanceConsent}
-                onChange={(event) => setPerformanceConsent(event.target.checked)}
-              />
-              <span>I consent to facial-performance tracking for this session.</span>
-            </label>
             <div className="calibration-page">
               <div className="calibration-page-header">
                 <div className="step-start-row">
@@ -2107,12 +2045,18 @@ function App() {
                     <button
                       className="button primary"
                       onClick={startCalibrationPage}
-                      disabled={!performanceConsent || currentCalibrationActive}
+                      disabled={currentCalibrationActive}
                     >
                       <Play size={17} />
                       Start this step
                     </button>
                   )}
+                  <button className="button secondary" onClick={previousCalibrationPage} disabled={calibrationIndex === 0}>
+                    Back
+                  </button>
+                  <button className="button primary" onClick={advanceCalibration} disabled={!canAdvanceCalibration}>
+                    {currentCalibrationStep.id === "review" ? "Continue to Target Face" : "Next page"}
+                  </button>
                 </div>
                 <span className="step-count">Step {calibrationIndex + 1} of {CALIBRATION_STEPS.length}</span>
                 <h3>{currentCalibrationStep.title}</h3>
@@ -2120,6 +2064,33 @@ function App() {
               </div>
 
               <div className="calibration-page-body">
+                <section className="capture-card performance-camera-card">
+                  <strong>Camera view</strong>
+                  <div className="camera-frame performance-camera-frame">
+                    <video ref={videoRef} playsInline muted />
+                    <canvas
+                      ref={canvasRef}
+                      className={blendPenEnabled ? "blend-pen-active" : ""}
+                      onPointerDown={(event) => {
+                        if (!blendPenEnabled) return;
+                        event.currentTarget.setPointerCapture(event.pointerId);
+                        beginBlendPenStroke();
+                        addBlendPenPoint(event);
+                      }}
+                      onPointerMove={(event) => {
+                        if (!blendPenEnabled || event.buttons !== 1) return;
+                        addBlendPenPoint(event);
+                      }}
+                    />
+                    {!cameraOn && (
+                      <div className="camera-placeholder">
+                        <Camera size={42} />
+                        <strong>Camera view is off</strong>
+                        <span>Click Start this step to begin capture.</span>
+                      </div>
+                    )}
+                  </div>
+                </section>
                 <section className="capture-card step-task-card">
                   <strong>{currentCalibrationStep.id === "review" ? "Review this calibration" : "Do this now"}</strong>
                   <div className="step-checklist">
@@ -2156,7 +2127,7 @@ function App() {
                   )}
                 </section>
 
-                <section className="capture-card">
+                <section className="capture-card performance-dashboard-card">
                   <strong>Live performance dashboard</strong>
                   <Metric label="Tracking" value={captureQuality.score} />
                   <Metric label="Left blink" value={normalizedPerformance?.eyes.leftBlink ?? 0} />
