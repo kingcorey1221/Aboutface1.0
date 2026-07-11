@@ -8,10 +8,8 @@ import {
   EyeOff,
   ImagePlus,
   Info,
-  OctagonAlert,
   Play,
   RefreshCw,
-  ShieldCheck,
   SlidersHorizontal,
   Sparkles,
   Square,
@@ -396,10 +394,6 @@ function App() {
   const hiddenAtRef = useRef<number | null>(null);
 
   const [step, setStep] = useState<AppStep>("welcome");
-  const [abuseNoticeAccepted, setAbuseNoticeAccepted] = useState(false);
-  const [permissionConsent, setPermissionConsent] = useState(false);
-  const [publicFigureConsent, setPublicFigureConsent] = useState(false);
-  const [minorConsent, setMinorConsent] = useState(false);
   const [consentRecord, setConsentRecord] = useState<ConsentRecord | null>(null);
   const [sessionAudit, setSessionAudit] = useState<SessionAuditRecord | null>(null);
   const [photos, setPhotos] = useState<PhotoAsset[]>([]);
@@ -763,12 +757,6 @@ function App() {
   }, []);
 
   const handleUpload = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
-    if (!permissionConsent || !publicFigureConsent || !minorConsent) {
-      setError("Confirm consent and responsible-use requirements before uploading a face photo.");
-      event.target.value = "";
-      return;
-    }
-
     const files = Array.from(event.target.files ?? []);
     if (files.length === 0) return;
     if (files.length > 1) {
@@ -781,9 +769,9 @@ function App() {
       consentRecord ??
       createConsentRecord({
         photoName: files[0].name,
-        ownsOrHasPermission: permissionConsent,
-        notPublicFigure: publicFigureConsent,
-        notMinorWithoutConsent: minorConsent,
+        ownsOrHasPermission: true,
+        notPublicFigure: true,
+        notMinorWithoutConsent: true,
       });
     setConsentRecord(record);
     if (!sessionAudit) {
@@ -843,9 +831,6 @@ function App() {
   }, [
     analyzePhotoMesh,
     consentRecord,
-    minorConsent,
-    permissionConsent,
-    publicFigureConsent,
     sessionAudit,
   ]);
 
@@ -939,9 +924,6 @@ function App() {
     setSelectedId(null);
     setConsentRecord(null);
     setSessionAudit(null);
-    setPermissionConsent(false);
-    setPublicFigureConsent(false);
-    setMinorConsent(false);
     deleteAllLocalData();
     setStatus("Local data deleted");
     setStep("welcome");
@@ -961,7 +943,6 @@ function App() {
   }, []);
 
   const storageStatus = getSecureStorageStatus();
-  const canUpload = permissionConsent && publicFigureConsent && minorConsent;
 
   if (step === "welcome") {
     return (
@@ -974,15 +955,11 @@ function App() {
               <p>Turn. Transform. Stay in control.</p>
             </div>
           </div>
-          <h2>Animate a permitted face photo with your own facial movement.</h2>
+          <h2>Animate a face photo with your own facial movement.</h2>
           <p>
             This MVP runs in your browser with MediaPipe face tracking. Webcam frames are not uploaded,
             and the first renderer is mesh-based, so expect believable alignment rather than perfect photorealism.
           </p>
-          <div className="notice">
-            <ShieldCheck size={18} />
-            <span>Only use images you own or have permission to use. No voice cloning or identity-check bypass tools are included.</span>
-          </div>
           <button className="button primary hero-action" onClick={() => setStep("upload")}>
             Create an Avatar
           </button>
@@ -1017,11 +994,11 @@ function App() {
 
         <section className="mini-panel">
           <h2>Reference face</h2>
-          <label className={`upload-drop ${!canUpload ? "disabled" : ""}`}>
+          <label className="upload-drop">
             <ImagePlus size={20} />
             <span>Upload face photo</span>
             <small>JPG, PNG, WebP. One clear front-facing face.</small>
-            <input type="file" accept="image/jpeg,image/png,image/webp" onChange={handleUpload} disabled={!canUpload} />
+            <input type="file" accept="image/jpeg,image/png,image/webp" onChange={handleUpload} />
           </label>
         </section>
 
@@ -1050,7 +1027,7 @@ function App() {
         <header className="stage-header">
           <div>
             <h2>
-              {step === "upload" && "Upload and consent"}
+              {step === "upload" && "Upload a face"}
               {step === "camera" && "Camera setup and calibration"}
               {step === "live" && "Live transformation"}
               {step === "recording" && "Recording"}
@@ -1072,15 +1049,9 @@ function App() {
 
         {step === "upload" && (
           <div className="flow-panel">
-            <div className="notice danger">
-              <OctagonAlert size={18} />
-              <span>Do not use About Face to deceive, harass, defraud, impersonate without permission, create sexual content, interfere with elections, or bypass identity checks.</span>
-            </div>
-            <Toggle label="I own this image or have permission from the person shown." checked={permissionConsent} onChange={setPermissionConsent} />
-            <Toggle label="This is not a celebrity, politician, public figure, or recognizable public personality." checked={publicFigureConsent} onChange={setPublicFigureConsent} />
-            <Toggle label="This does not involve a minor unless I have verified parental consent." checked={minorConsent} onChange={setMinorConsent} />
-            <Toggle label="I understand this MVP adds a visible AI-Generated watermark." checked={abuseNoticeAccepted} onChange={setAbuseNoticeAccepted} />
-            {!canUpload && <p className="helper-text">Confirm the three required checks to enable upload.</p>}
+            <p className="helper-text">
+              Upload one clear, front-facing JPG, PNG, or WebP. The app will validate that it can detect exactly one usable face.
+            </p>
           </div>
         )}
 

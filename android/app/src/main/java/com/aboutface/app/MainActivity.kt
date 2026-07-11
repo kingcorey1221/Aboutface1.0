@@ -93,7 +93,6 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun AboutFaceNativeApp(cameraGranted: Boolean, requestCamera: () -> Unit) {
-    var consentAccepted by remember { mutableStateOf(false) }
     var streaming by remember { mutableStateOf(false) }
     var recording by remember { mutableStateOf(false) }
     var performanceMode by remember { mutableStateOf(PerformanceMode.Balanced) }
@@ -110,20 +109,16 @@ fun AboutFaceNativeApp(cameraGranted: Boolean, requestCamera: () -> Unit) {
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
                 Header()
-                ConsentPanel(
-                    consentAccepted = consentAccepted,
-                    onAccept = { consentAccepted = true }
-                )
                 CapabilityPanel()
                 PerformanceModePanel(performanceMode) { performanceMode = it }
 
                 if (!cameraGranted) {
-                    Button(onClick = requestCamera, enabled = consentAccepted) {
+                    Button(onClick = requestCamera) {
                         Text("Allow Camera")
                     }
                 } else {
                     NativeGeneratedPreview(
-                        enabled = consentAccepted,
+                        enabled = true,
                         performanceMode = performanceMode,
                         onMetrics = { metrics = it },
                         onStatus = { status = it }
@@ -133,7 +128,7 @@ fun AboutFaceNativeApp(cameraGranted: Boolean, requestCamera: () -> Unit) {
                 StatusPanel(
                     metrics = metrics,
                     status = status,
-                    cameraActive = cameraGranted && consentAccepted,
+                    cameraActive = cameraGranted,
                     streaming = streaming,
                     recording = recording
                 )
@@ -173,26 +168,6 @@ private fun Header() {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text("About Face", color = Color(0xFFF1D28A), fontWeight = FontWeight.Bold, style = MaterialTheme.typography.headlineMedium)
         Text("Native Android capture path. Fast Preview - reduced realism.", color = Color(0xFFD8CFB3))
-    }
-}
-
-@Composable
-private fun ConsentPanel(consentAccepted: Boolean, onAccept: () -> Unit) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(Color(0xFF242718), RoundedCornerShape(8.dp))
-            .padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        Text("Consent and privacy", color = Color(0xFFF0EAD8), fontWeight = FontWeight.Bold)
-        Text(
-            "Local processing by default. No cloud upload, no facial recognition, no raw camera-frame storage by default.",
-            color = Color(0xFFC9C0A4)
-        )
-        Button(onClick = onAccept, enabled = !consentAccepted) {
-            Text(if (consentAccepted) "Consent accepted" else "Accept camera and facial-processing consent")
-        }
     }
 }
 
