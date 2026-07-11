@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">About Face</string>
+    <string name="title_activity_main">About Face</string>
+    <string name="package_name">com.aboutface.app</string>
+    <string name="custom_url_scheme">com.aboutface.app</string>
+</resources>

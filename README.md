@@ -36,6 +36,7 @@ Detailed reports:
 
 - `docs/AUDIT.md`
 - `docs/ARCHITECTURE.md`
+- `docs/ANDROID.md`
 - `docs/DEFECT_REPORT.md`
 - `docs/MIGRATION_PLAN.md`
 - `docs/MODEL_COMPARISON.md`
