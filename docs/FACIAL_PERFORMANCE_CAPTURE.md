@@ -27,7 +27,7 @@ Expression values use `0.0 = no calibrated activation` and `1.0 = maximum calibr
 
 The app does not let Stage 2 upload/rendering start until calibration quality passes the threshold.
 
-Each calibration item is rendered as its own wizard page with a focused title, instruction, checklist, progress indicator, quality messages, back/retry/restart controls, and a final review page.
+Each calibration item is rendered as its own wizard page with a focused title, instruction, checklist, Start button, progress indicator, quality messages, back/retry/restart controls, and a final review page.
 
 ## Storage
 

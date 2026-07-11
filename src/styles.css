@@ -627,6 +627,13 @@ input[type="checkbox"]:checked::before {
   background: rgba(255, 255, 255, 0.035);
 }
 
+.step-start-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .calibration-page-header h3 {
   margin: 0;
   color: #f6e6bd;

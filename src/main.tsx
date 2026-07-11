@@ -1010,6 +1010,7 @@ function App() {
   const [performanceConsent, setPerformanceConsent] = useState(false);
   const [calibrationProfile, setCalibrationProfile] = useState<FacialCalibrationProfile | null>(null);
   const [calibrationFrames, setCalibrationFrames] = useState<Partial<Record<CalibrationStepId, number>>>({});
+  const [activeCalibrationStepId, setActiveCalibrationStepId] = useState<CalibrationStepId | null>(null);
   const [captureQuality, setCaptureQuality] = useState<CaptureQuality>({
     passed: false,
     score: 0,
@@ -1065,6 +1066,7 @@ function App() {
       }`
     : "No active photo";
   const currentCalibrationStep = CALIBRATION_STEPS[calibrationIndex] ?? CALIBRATION_STEPS[0];
+  const currentCalibrationActive = activeCalibrationStepId === currentCalibrationStep.id;
   const currentCalibrationCount = calibrationFrames[currentCalibrationStep.id] ?? 0;
   const currentCalibrationProgress =
     currentCalibrationStep.minimumFrames === 0
@@ -1268,6 +1270,7 @@ function App() {
         performanceConsent &&
         !calibrationComplete &&
         currentCalibrationStep.id !== "review" &&
+        activeCalibrationStepId === currentCalibrationStep.id &&
         quality.passed
       ) {
         const nextFrames = [
@@ -1424,6 +1427,7 @@ function App() {
     }));
     rafRef.current = requestAnimationFrame(drawFrame);
   }, [
+    activeCalibrationStepId,
     blendMode,
     calibrationComplete,
     calibrationProfile,
@@ -1478,13 +1482,31 @@ function App() {
       setStatus("Searching for face");
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
       rafRef.current = requestAnimationFrame(drawFrame);
+      return true;
     } catch (err) {
       setError(friendlyErrorMessage(err, "Camera failed to start"));
       setStatus("Camera blocked");
       setCameraOn(false);
       setIsLoadingModel(false);
+      return false;
     }
   }, [drawFrame, ensureLandmarker, performanceConsent, readyToRenderTarget, selectedDeviceId, step]);
+
+  const startCalibrationPage = useCallback(async () => {
+    if (!performanceConsent) {
+      setError("Consent is required before facial-performance capture can start.");
+      return;
+    }
+    setError(null);
+    if (!cameraOn) {
+      const started = await startCamera();
+      if (!started) {
+        setActiveCalibrationStepId(null);
+        return;
+      }
+    }
+    setActiveCalibrationStepId(currentCalibrationStep.id);
+  }, [cameraOn, currentCalibrationStep.id, performanceConsent, startCamera]);
 
   const stopCamera = useCallback(() => {
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
@@ -1648,6 +1670,7 @@ function App() {
     performanceProviderRef.current.setCalibrationProfile(null);
     setCalibrationFrames({});
     setCalibrationIndex(0);
+    setActiveCalibrationStepId(null);
     setCalibrationComplete(false);
     setCalibrationProfile(null);
     setNormalizedPerformance(null);
@@ -1665,10 +1688,12 @@ function App() {
       [currentCalibrationStep.id]: 0,
     }));
     setCaptureQuality({ passed: false, score: 0, messages: ["Section reset. Repeat the instruction."] });
+    setActiveCalibrationStepId(null);
   }, [currentCalibrationStep.id]);
 
   const previousCalibrationPage = useCallback(() => {
     setCalibrationIndex((current) => Math.max(0, current - 1));
+    setActiveCalibrationStepId(null);
     setError(null);
   }, []);
 
@@ -1679,6 +1704,7 @@ function App() {
         return;
       }
       setCalibrationComplete(true);
+      setActiveCalibrationStepId(null);
       setStep("upload");
       setStatus("Ready to render target face");
       return;
@@ -1696,6 +1722,7 @@ function App() {
       performanceProviderRef.current.setCalibrationProfile(profile);
     }
     setCalibrationIndex(Math.min(nextIndex, CALIBRATION_STEPS.length - 1));
+    setActiveCalibrationStepId(null);
     setError(null);
   }, [calibrationIndex, calibrationProfile, currentCalibrationStep.id]);
 
@@ -2032,7 +2059,26 @@ function App() {
             </label>
             <div className="calibration-page">
               <div className="calibration-page-header">
-                <span className={`status-pill ${cameraOn ? "active" : ""}`}>{cameraOn ? "Camera active" : "Camera idle"}</span>
+                <div className="step-start-row">
+                  <span className={`status-pill ${cameraOn ? "active" : ""}`}>{cameraOn ? "Camera active" : "Camera idle"}</span>
+                  <span className={`status-pill ${currentCalibrationActive ? "active" : ""}`}>
+                    {currentCalibrationStep.id === "review"
+                      ? "Review page"
+                      : currentCalibrationActive
+                        ? "Capturing this page"
+                        : "Not started"}
+                  </span>
+                  {currentCalibrationStep.id !== "review" && (
+                    <button
+                      className="button primary"
+                      onClick={startCalibrationPage}
+                      disabled={!performanceConsent || currentCalibrationActive}
+                    >
+                      <Play size={17} />
+                      Start this step
+                    </button>
+                  )}
+                </div>
                 <span className="step-count">Step {calibrationIndex + 1} of {CALIBRATION_STEPS.length}</span>
                 <h3>{currentCalibrationStep.title}</h3>
                 <p>{currentCalibrationStep.instruction}</p>
@@ -2052,7 +2098,9 @@ function App() {
                         <span style={{ width: `${currentCalibrationProgress}%` }} />
                       </div>
                       <small>
-                        {currentCalibrationCount} / {currentCalibrationStep.minimumFrames} stable frames captured
+                        {currentCalibrationActive
+                          ? `${currentCalibrationCount} / ${currentCalibrationStep.minimumFrames} stable frames captured`
+                          : "Click Start this step when you are ready."}
                       </small>
                       <div className="quality-list">
                         {captureQuality.messages.map((message) => (
