@@ -605,6 +605,29 @@ input[type="checkbox"]:checked::before {
   border-radius: 7px;
 }
 
+.neural-panel {
+  align-items: center;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.neural-panel > div {
+  display: grid;
+  gap: 4px;
+}
+
+.neural-panel span {
+  color: #c9c0a4;
+  font-size: 13px;
+}
+
+.neural-output {
+  grid-column: 1 / -1;
+  width: min(720px, 100%);
+  border: 1px solid rgba(241, 210, 138, 0.18);
+  border-radius: 7px;
+  background: #000;
+}
+
 .metadata-box {
   max-height: 180px;
   overflow: auto;

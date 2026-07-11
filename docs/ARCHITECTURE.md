@@ -10,6 +10,12 @@ flowchart TD
   G --> H["TargetIdentity"]
   E --> I["FaceReenactmentRenderer"]
   H --> I
+  F --> P["FasterLivePortrait Source Image"]
+  A --> Q["Short Driving Clip"]
+  P --> R["Local FasterLivePortrait API"]
+  Q --> R
+  R --> S["Generated Neural MP4"]
+  S --> M
   I --> J["Temporal Stabilization"]
   J --> K["Face, Hair, Neck, Background Compositor"]
   K --> L["AI-Generated - About Face Disclosure"]
@@ -26,6 +32,7 @@ flowchart TD
 - Blendshape mapping to `FacialPerformanceFrame`.
 - Basic upload and target mesh preparation.
 - Fast Preview canvas renderer.
+- FasterLivePortrait API integration for neural render samples.
 - Visible disclosure watermark.
 - Preview and recording.
 - Android native launch path using Kotlin, Compose, and CameraX Preview/ImageAnalysis.
@@ -38,15 +45,15 @@ flowchart TD
 - Driver calibration UI exists but does not yet compute a full baseline profile.
 - Smoothing is not yet region-specific in the live loop.
 - Target identity preparation does not yet include masks, depth, canonical pose, or embeddings.
-- Mesh preview still renders in `main.tsx`.
+- Mesh and locked-portrait previews still render in `main.tsx`.
+- Neural rendering currently uses a short captured driving clip, not a persistent frame stream.
 - Android native path currently tracks CameraX frame flow but does not yet run native MediaPipe Face Landmarker inference.
 - Android recording, Sharesheet, MediaProjection, and WebRTC paths are product scaffolds, not completed media pipelines.
 
 ## Not Yet Implemented
 
-- Neural renderer.
 - 3D renderer.
-- Local inference service.
+- Persistent neural frame-streaming service.
 - Dedicated compositor.
 - Frame transport.
 - Desktop app.

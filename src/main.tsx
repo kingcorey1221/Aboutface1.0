@@ -24,6 +24,7 @@ import {
   type NormalizedLandmark,
 } from "@mediapipe/tasks-vision";
 import Delaunator from "delaunator";
+import JSZip from "jszip";
 import type {
   AppStep,
   CalibrationPose,
@@ -130,6 +131,7 @@ const blendModeToComposite: Record<BlendMode, GlobalCompositeOperation> = {
 };
 
 const MODEL_PATH = "/mediapipe/models/face_landmarker.task";
+const NEURAL_RENDER_ENDPOINT = "/neural-render/predict/";
 
 function loadImage(url: string) {
   return new Promise<HTMLImageElement>((resolve, reject) => {
@@ -152,6 +154,61 @@ function friendlyErrorMessage(err: unknown, fallback: string) {
     return "Face tracking model failed to load. The app now expects the local model at /mediapipe/models/face_landmarker.task.";
   }
   return err.message || fallback;
+}
+
+function recordStream(stream: MediaStream, durationMs: number) {
+  return new Promise<Blob>((resolve, reject) => {
+    const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp9")
+      ? "video/webm;codecs=vp9"
+      : "video/webm";
+    const chunks: BlobPart[] = [];
+    const recorder = new MediaRecorder(stream, { mimeType });
+    recorder.ondataavailable = (event) => {
+      if (event.data.size > 0) chunks.push(event.data);
+    };
+    recorder.onerror = () => reject(new Error("Could not record the driving clip for neural rendering."));
+    recorder.onstop = () => resolve(new Blob(chunks, { type: "video/webm" }));
+    recorder.start();
+    window.setTimeout(() => {
+      if (recorder.state === "recording") recorder.stop();
+    }, durationMs);
+  });
+}
+
+async function extractGeneratedVideo(zipBlob: Blob) {
+  const archive = await JSZip.loadAsync(zipBlob);
+  const candidates = Object.values(archive.files)
+    .filter((file) => !file.dir && file.name.toLowerCase().endsWith(".mp4"))
+    .sort((a, b) => {
+      const aScore = a.name.includes("-org") ? 0 : a.name.includes("-crop") ? 1 : 2;
+      const bScore = b.name.includes("-org") ? 0 : b.name.includes("-crop") ? 1 : 2;
+      return aScore - bScore;
+    });
+  const videoFile = candidates[0];
+  if (!videoFile) throw new Error("The neural renderer did not return an MP4 output.");
+  return videoFile.async("blob");
+}
+
+function appendLivePortraitDefaults(formData: FormData) {
+  const defaults: Record<string, string> = {
+    flag_is_animal: "false",
+    flag_pickle: "false",
+    flag_relative_input: "true",
+    flag_do_crop_input: "true",
+    flag_remap_input: "true",
+    driving_multiplier: "1.0",
+    flag_stitching: "true",
+    flag_crop_driving_video_input: "true",
+    flag_video_editing_head_rotation: "false",
+    scale: "2.3",
+    vx_ratio: "0.0",
+    vy_ratio: "-0.125",
+    scale_crop_driving_video: "2.2",
+    vx_ratio_crop_driving_video: "0.0",
+    vy_ratio_crop_driving_video: "-0.1",
+    driving_smooth_observation_variance: "0.0000001",
+  };
+  Object.entries(defaults).forEach(([key, value]) => formData.append(key, value));
 }
 
 function drawWatermark(ctx: CanvasRenderingContext2D, width: number, height: number) {
@@ -745,6 +802,9 @@ function App() {
   const [recording, setRecording] = useState(false);
   const [recordingUrl, setRecordingUrl] = useState<string | null>(null);
   const [recordingMetadata, setRecordingMetadata] = useState<string | null>(null);
+  const [neuralRendering, setNeuralRendering] = useState(false);
+  const [neuralRenderUrl, setNeuralRenderUrl] = useState<string | null>(null);
+  const [neuralRenderStatus, setNeuralRenderStatus] = useState("Local neural backend not checked");
   const [cameraOn, setCameraOn] = useState(false);
   const [isLoadingModel, setIsLoadingModel] = useState(false);
   const [status, setStatus] = useState("Camera idle");
@@ -793,10 +853,11 @@ function App() {
       streamRef.current?.getTracks().forEach((track) => track.stop());
       photosRef.current.forEach((photo) => URL.revokeObjectURL(photo.url));
       if (recordingUrl) URL.revokeObjectURL(recordingUrl);
+      if (neuralRenderUrl) URL.revokeObjectURL(neuralRenderUrl);
       landmarkerRef.current?.close();
       sourceLandmarkerRef.current?.close();
     };
-  }, [recordingUrl]);
+  }, [neuralRenderUrl, recordingUrl]);
 
   useEffect(() => {
     photosRef.current = photos;
@@ -1280,6 +1341,58 @@ function App() {
     link.click();
   }, [recordingUrl]);
 
+  const renderNeuralSample = useCallback(async () => {
+    const video = videoRef.current;
+    if (!selectedPhoto || !video || !cameraOn) {
+      setError("Start the camera and select a reference photo before using neural render.");
+      return;
+    }
+
+    const captureStream = (video as HTMLVideoElement & { captureStream?: (frameRate?: number) => MediaStream }).captureStream;
+    if (!captureStream) {
+      setError("This browser cannot capture the camera stream for neural rendering.");
+      return;
+    }
+
+    try {
+      setError(null);
+      setNeuralRendering(true);
+      setNeuralRenderStatus("Recording a 2.5 second driving clip");
+      const drivingClip = await recordStream(captureStream.call(video, 24), 2500);
+      setNeuralRenderStatus("Sending clip to local FasterLivePortrait backend");
+
+      const sourceBlob = await fetch(selectedPhoto.url).then((response) => response.blob());
+      const formData = new FormData();
+      formData.append("source_image", sourceBlob, selectedPhoto.name || "source.png");
+      formData.append("driving_video", drivingClip, "driver.webm");
+      appendLivePortraitDefaults(formData);
+
+      const response = await fetch(NEURAL_RENDER_ENDPOINT, {
+        method: "POST",
+        body: formData,
+      });
+      if (!response.ok) {
+        throw new Error(`FasterLivePortrait backend returned HTTP ${response.status}.`);
+      }
+
+      setNeuralRenderStatus("Extracting generated MP4");
+      const generatedBlob = await extractGeneratedVideo(await response.blob());
+      if (neuralRenderUrl) URL.revokeObjectURL(neuralRenderUrl);
+      setNeuralRenderUrl(URL.createObjectURL(generatedBlob));
+      setNeuralRenderStatus("Neural render ready");
+    } catch (err) {
+      setNeuralRenderStatus("Neural backend unavailable");
+      setError(
+        friendlyErrorMessage(
+          err,
+          "Start FasterLivePortrait API on http://127.0.0.1:9871, then try Neural render again.",
+        ),
+      );
+    } finally {
+      setNeuralRendering(false);
+    }
+  }, [cameraOn, neuralRenderUrl, selectedPhoto]);
+
   const completeCalibrationStep = useCallback(() => {
     setCalibrationIndex((current) => {
       const next = current + 1;
@@ -1496,6 +1609,9 @@ function App() {
               </button>
             )}
             <button className="button secondary" onClick={takeSnapshot} disabled={!cameraOn}><Download size={18} />Snapshot</button>
+            <button className="button secondary" onClick={renderNeuralSample} disabled={!cameraOn || !selectedPhoto || neuralRendering}>
+              <Sparkles size={18} />{neuralRendering ? "Rendering" : "Neural render"}
+            </button>
           </div>
         </header>
 
@@ -1539,6 +1655,22 @@ function App() {
                 </div>
               )}
             </div>
+          </div>
+        )}
+
+        {step !== "upload" && (
+          <div className="flow-panel neural-panel">
+            <div>
+              <strong>Model-backed renderer</strong>
+              <span>{neuralRenderStatus}</span>
+            </div>
+            <button className="button secondary" onClick={renderNeuralSample} disabled={!cameraOn || !selectedPhoto || neuralRendering}>
+              <Sparkles size={17} />
+              {neuralRendering ? "Rendering with FasterLivePortrait" : "Render 2.5s neural sample"}
+            </button>
+            {neuralRenderUrl && (
+              <video className="neural-output" src={neuralRenderUrl} controls playsInline />
+            )}
           </div>
         )}
 

@@ -9,6 +9,7 @@ Tagline: **Turn. Transform. Stay in control.**
 - React, TypeScript, Vite
 - MediaPipe Face Landmarker from local `/public/mediapipe`
 - Canvas-based mesh renderer
+- Optional FasterLivePortrait neural render backend
 - Browser `MediaDevices` camera access
 - Browser `MediaRecorder` for WebM export where supported
 - Local-first consent/session records in `localStorage`
@@ -22,6 +23,17 @@ npm run dev
 ```
 
 Open `http://127.0.0.1:5173/` in Chrome or Edge.
+
+## Neural Renderer Setup
+
+The realistic model-backed path uses FasterLivePortrait locally.
+
+```powershell
+npm run neural:setup
+npm run neural:api
+```
+
+Then start the normal app and click `Neural render` after uploading a source photo and starting the camera. The app records a short driving clip, sends it to the local FasterLivePortrait API, extracts the generated MP4, and previews it inside About Face.
 
 ## Validation
 
@@ -66,6 +78,7 @@ The pipeline is:
 - Normalized `FacialPerformanceFrame` model for head pose, eyes, brows, mouth, cheeks, and confidence.
 - Temporal smoothing control.
 - Fast Preview mesh-based target photo warping.
+- FasterLivePortrait API integration for model-backed neural render samples.
 - Edge feathering, eye/mouth cutouts, and basic live lighting match.
 - Persistent visible `AI-Generated - About Face` watermark on canvas output.
 - Snapshot export.
@@ -87,7 +100,7 @@ The pipeline is:
 
 ## Simulated or Future Work
 
-- Neural reenactment.
+- Full live frame-by-frame neural streaming.
 - WebGL/Three.js renderer.
 - Web Worker tracking.
 - True target-face region reconstruction for teeth, inner mouth, eyelids, ears, hairline, and revealed head turns.
@@ -112,5 +125,5 @@ The current renderer is a Fast Preview mesh renderer. It can make a target photo
 4. Replace 2D canvas mesh with WebGL or Three.js target mesh for an intermediate 3D mode.
 5. Add proper segmentation, depth, occlusion, and region reconstruction.
 6. Add optional Supabase Auth, private buckets, signed URLs, encrypted saved projects, and server-backed abuse controls.
-7. Add licensed neural reenactment renderer behind the `FaceReenactmentRenderer` interface.
+7. Replace the sample-based FasterLivePortrait API call with a persistent frame-streaming neural renderer.
 8. Add desktop virtual-camera output as a separate app, not browser-only.
