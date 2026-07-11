@@ -373,6 +373,21 @@ h1 {
   grid-template-columns: 1fr;
 }
 
+.performance-preview-grid {
+  align-items: stretch;
+  margin-bottom: 12px;
+}
+
+.performance-camera-frame {
+  min-height: 300px;
+  max-height: 42vh;
+}
+
+.performance-camera-frame canvas,
+.performance-camera-frame video {
+  min-height: 300px;
+}
+
 .camera-frame.compact {
   min-height: 260px;
 }

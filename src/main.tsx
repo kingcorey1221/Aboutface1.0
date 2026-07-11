@@ -2041,6 +2041,41 @@ function App() {
         </header>
 
         {step === "performance" && (
+          <div className={`preview-grid performance-preview-grid ${showOriginal ? "" : "single"}`}>
+            {showOriginal && (
+              <div className="camera-frame compact performance-camera-frame">
+                <video ref={sourcePreviewRef} playsInline muted />
+                {!cameraOn && <div className="camera-placeholder"><Camera size={32} /><strong>Original preview</strong></div>}
+              </div>
+            )}
+            <div className="camera-frame performance-camera-frame">
+              <video ref={videoRef} playsInline muted />
+              <canvas
+                ref={canvasRef}
+                className={blendPenEnabled ? "blend-pen-active" : ""}
+                onPointerDown={(event) => {
+                  if (!blendPenEnabled) return;
+                  event.currentTarget.setPointerCapture(event.pointerId);
+                  beginBlendPenStroke();
+                  addBlendPenPoint(event);
+                }}
+                onPointerMove={(event) => {
+                  if (!blendPenEnabled || event.buttons !== 1) return;
+                  addBlendPenPoint(event);
+                }}
+              />
+              {!cameraOn && (
+                <div className="camera-placeholder">
+                  <Camera size={42} />
+                  <strong>Camera view is off</strong>
+                  <span>Check consent, then click Start this step to begin capture.</span>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {step === "performance" && (
           <div className="flow-panel performance-capture-panel">
             <div className="notice">
               <Info size={18} />
@@ -2185,7 +2220,7 @@ function App() {
           </div>
         )}
 
-        {step !== "upload" && (
+        {step !== "upload" && step !== "performance" && (
           <div className={`preview-grid ${showOriginal ? "" : "single"}`}>
             {showOriginal && (
               <div className="camera-frame compact">
