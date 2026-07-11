@@ -48,10 +48,11 @@ import {
 } from "./services/recording";
 import { getSecureStorageStatus } from "./services/secureStorage";
 import { mapBlendshapesToPerformance, smoothPerformance } from "./tracking/BlendshapeMapper";
+import { computeSafeRoll } from "./rendering/safeRoll";
 import "./styles.css";
 
 type BlendMode = "normal" | "multiply" | "screen" | "overlay" | "soft-light";
-type OverlayMode = "portrait" | "mesh" | "flat";
+type OverlayMode = "swap" | "portrait" | "mesh" | "flat";
 
 type Point = {
   x: number;
@@ -568,6 +569,7 @@ function drawLockedPortrait(
   lightingStrength: number,
   blendPenPoints: BlendPenPoint[],
   hairMotion: HairMotion,
+  headRoll: number,
 ) {
   if (!photo.mesh) return false;
 
@@ -610,9 +612,7 @@ function drawLockedPortrait(
     width: targetFace.width * 2.24,
     height: targetFace.height * 2.92,
   };
-  const left = targetPoints[234];
-  const right = targetPoints[454];
-  const angle = left && right ? Math.atan2(right.y - left.y, right.x - left.x) + hairMotion.rotation : hairMotion.rotation;
+  const angle = clamp(headRoll, -0.55, 0.55) + hairMotion.rotation;
 
   layerCtx.save();
   layerCtx.translate(targetRect.x + targetRect.width / 2, targetRect.y + targetRect.height / 2);
@@ -650,6 +650,81 @@ function drawLockedPortrait(
     layerCtx.globalCompositeOperation = "soft-light";
     layerCtx.globalAlpha = Math.min(0.45, lightingStrength / 140);
     layerCtx.filter = "grayscale(1) contrast(1.16) brightness(0.98)";
+    layerCtx.drawImage(video, 0, 0, width, height);
+    layerCtx.restore();
+
+    layerCtx.save();
+    layerCtx.globalCompositeOperation = "destination-in";
+    layerCtx.drawImage(mask, 0, 0);
+    layerCtx.restore();
+  }
+
+  applyBlendPen(layerCtx, blendPenPoints);
+
+  ctx.save();
+  ctx.globalAlpha = opacity / 100;
+  ctx.globalCompositeOperation = blendModeToComposite[blendMode];
+  ctx.drawImage(layer, 0, 0);
+  ctx.restore();
+  return true;
+}
+
+function drawFaceSwapMesh(
+  ctx: CanvasRenderingContext2D,
+  video: HTMLVideoElement,
+  photo: PhotoAsset,
+  targetPoints: Point[],
+  opacity: number,
+  blendMode: BlendMode,
+  edgeSoftness: number,
+  lightingStrength: number,
+  blendPenPoints: BlendPenPoint[],
+) {
+  if (!photo.mesh) return false;
+
+  const canvas = ctx.canvas;
+  const width = canvas.width;
+  const height = canvas.height;
+  const layer = document.createElement("canvas");
+  const layerCtx = layer.getContext("2d");
+  const mask = document.createElement("canvas");
+  const maskCtx = mask.getContext("2d");
+  if (!layerCtx || !maskCtx) return false;
+
+  layer.width = width;
+  layer.height = height;
+  mask.width = width;
+  mask.height = height;
+
+  const imageWidth = photo.image.naturalWidth || photo.image.width;
+  const imageHeight = photo.image.naturalHeight || photo.image.height;
+  const sourcePoints = photo.mesh.landmarks.map((point) => toPixelPoint(point, imageWidth, imageHeight));
+  const swapPoints = createIdentityLockedTargetPoints(sourcePoints, targetPoints);
+
+  for (let index = 0; index < photo.mesh.triangles.length; index += 3) {
+    const a = photo.mesh.triangles[index];
+    const b = photo.mesh.triangles[index + 1];
+    const c = photo.mesh.triangles[index + 2];
+    drawTriangleImagePatch(
+      layerCtx,
+      photo.image,
+      [sourcePoints[a], sourcePoints[b], sourcePoints[c]],
+      [swapPoints[a], swapPoints[b], swapPoints[c]],
+    );
+  }
+
+  drawGeneratedMask(maskCtx, swapPoints, Math.max(6, edgeSoftness), null);
+
+  layerCtx.save();
+  layerCtx.globalCompositeOperation = "destination-in";
+  layerCtx.drawImage(mask, 0, 0);
+  layerCtx.restore();
+
+  if (lightingStrength > 0) {
+    layerCtx.save();
+    layerCtx.globalCompositeOperation = "soft-light";
+    layerCtx.globalAlpha = Math.min(0.48, lightingStrength / 130);
+    layerCtx.filter = "grayscale(1) contrast(1.24) brightness(0.98)";
     layerCtx.drawImage(video, 0, 0, width, height);
     layerCtx.restore();
 
@@ -834,7 +909,7 @@ function App() {
   const [mirror, setMirror] = useState(true);
   const [debug, setDebug] = useState(false);
   const [blendMode, setBlendMode] = useState<BlendMode>("normal");
-  const [overlayMode, setOverlayMode] = useState<OverlayMode>("portrait");
+  const [overlayMode, setOverlayMode] = useState<OverlayMode>("swap");
   const [error, setError] = useState<string | null>(null);
 
   const selectedPhoto = useMemo(
@@ -1035,11 +1110,7 @@ function App() {
         y: hairSwayRef.current.y * 0.7 + targetHairSway.y * 0.3,
         rotation: hairSwayRef.current.rotation * 0.62 + targetHairSway.rotation * 0.38,
       };
-      const left = mappedFace[234];
-      const right = mappedFace[454];
-      const angle = rotation
-        ? Math.atan2((right.y - left.y) * height, (right.x - left.x) * width)
-        : 0;
+      const angle = computeSafeRoll(mappedFace, width, height, rotation);
       const drawWidth = bounds.width * (scale / 100);
       const drawHeight = bounds.height * (scale / 100);
       const centerX = bounds.minX + bounds.width / 2;
@@ -1048,7 +1119,20 @@ function App() {
       ctx.save();
       ctx.translate(centerX, centerY);
       ctx.rotate(angle);
-      if (selectedPhoto && overlayMode === "portrait" && selectedPhoto.mesh) {
+      if (selectedPhoto && overlayMode === "swap" && selectedPhoto.mesh) {
+        ctx.restore();
+        drawFaceSwapMesh(
+          ctx,
+          video,
+          selectedPhoto,
+          targetPoints,
+          opacity,
+          blendMode,
+          edgeSoftness,
+          lightingStrength,
+          blendPenPointsRef.current,
+        );
+      } else if (selectedPhoto && overlayMode === "portrait" && selectedPhoto.mesh) {
         ctx.restore();
         drawLockedPortrait(
           ctx,
@@ -1061,6 +1145,7 @@ function App() {
           lightingStrength,
           blendPenPointsRef.current,
           hairSwayRef.current,
+          angle,
         );
       } else if (selectedPhoto && overlayMode === "mesh" && selectedPhoto.mesh) {
         ctx.restore();
@@ -1436,7 +1521,7 @@ function App() {
     setMirror(true);
     setDebug(false);
     setBlendMode("normal");
-    setOverlayMode("portrait");
+    setOverlayMode("swap");
     blendPenPointsRef.current = [];
     blendPenUndoRef.current = [];
     blendPenRedoRef.current = [];
@@ -1522,8 +1607,8 @@ function App() {
           </div>
           <h2>Animate a face photo with your own facial movement.</h2>
           <p>
-            This MVP runs in your browser with MediaPipe face tracking. Webcam frames are not uploaded,
-            and the first renderer is mesh-based, so expect believable alignment rather than perfect photorealism.
+            Upload a face, start the camera, and use Face swap for a live replacement preview or Neural render for
+            model-backed output when the local backend is running.
           </p>
           <button className="button primary hero-action" onClick={() => setStep("upload")}>
             Create an Avatar
@@ -1761,8 +1846,9 @@ function App() {
         <label className="select-row">
           <span>Overlay mode</span>
           <select value={overlayMode} onChange={(event) => setOverlayMode(event.target.value as OverlayMode)}>
-            <option value="portrait">Real photo lock</option>
-            <option value="mesh">Expression mesh - experimental</option>
+            <option value="swap">Face swap</option>
+            <option value="portrait">Full photo lock</option>
+            <option value="mesh">Expression mesh with hair - experimental</option>
             <option value="flat">Flat photo</option>
           </select>
         </label>
@@ -1794,7 +1880,7 @@ function App() {
           <Metric label="Smile L/R" value={((facialPerformance?.mouth.smileLeft ?? 0) + (facialPerformance?.mouth.smileRight ?? 0)) / 2} />
           <Metric label="Confidence" value={facialPerformance?.trackingConfidence ?? 0} />
         </div>
-        <div className="note">Use Real photo lock for the most authentic current output. Expression mesh is experimental and can distort the face until a neural renderer is added.</div>
+        <div className="note">Face swap replaces the live face area with the uploaded face and follows head movement. Use Neural render for model-backed output.</div>
       </aside>
     </main>
   );
