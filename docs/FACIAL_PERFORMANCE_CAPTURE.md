@@ -27,6 +27,8 @@ Expression values use `0.0 = no calibrated activation` and `1.0 = maximum calibr
 
 The app does not let Stage 2 upload/rendering start until calibration quality passes the threshold.
 
+Each calibration item is rendered as its own wizard page with a focused title, instruction, checklist, progress indicator, quality messages, back/retry/restart controls, and a final review page.
+
 ## Storage
 
 Default behavior keeps calibration in memory for the current session. The optional `Save my calibration on this device` setting stores only the calibration profile with AES-GCM encryption in browser local storage. Raw camera frames and raw video are not stored.

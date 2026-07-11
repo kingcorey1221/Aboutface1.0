@@ -21,6 +21,7 @@ export type CalibrationStepDefinition = {
   title: string;
   instruction: string;
   minimumFrames: number;
+  checks: string[];
 };
 
 export type CaptureQuality = {
@@ -35,60 +36,70 @@ export const CALIBRATION_STEPS: CalibrationStepDefinition[] = [
     title: "Position and lighting",
     instruction: "Center your face inside the guide and look directly at the camera.",
     minimumFrames: 24,
+    checks: ["Exactly one face visible", "Face centered in the guide", "Good lighting", "Eyes and mouth visible"],
   },
   {
     id: "neutral",
     title: "Neutral expression",
     instruction: "Relax your face and look naturally at the camera.",
     minimumFrames: 30,
+    checks: ["Relax jaw and mouth", "Keep eyes naturally open", "Hold still for a stable baseline"],
   },
   {
     id: "blink",
     title: "Blink calibration",
     instruction: "Blink normally three times.",
     minimumFrames: 45,
+    checks: ["Blink at a normal pace", "Keep your head still", "Let both eyes reopen fully"],
   },
   {
     id: "gaze",
     title: "Eye movement",
     instruction: "Look left, right, up, and down without turning your head.",
     minimumFrames: 45,
+    checks: ["Move only your eyes", "Keep your head centered", "Pause briefly in each direction"],
   },
   {
     id: "smile",
     title: "Smile",
     instruction: "Give a natural smile, then relax.",
     minimumFrames: 36,
+    checks: ["Smile naturally", "Relax back to neutral", "Keep your face inside the guide"],
   },
   {
     id: "mouth",
     title: "Mouth and jaw",
     instruction: "Open your mouth, close it, purse your lips, then say: About Face.",
     minimumFrames: 48,
+    checks: ["Open naturally", "Close lips fully", "Purse lips", "Say About Face for motion only"],
   },
   {
     id: "brows",
     title: "Eyebrows",
     instruction: "Raise your eyebrows, lower them, then bring them together.",
     minimumFrames: 36,
+    checks: ["Raise both brows", "Lower brows", "Bring brows together", "Avoid moving out of frame"],
   },
   {
     id: "head",
     title: "Head movement",
     instruction: "Slowly turn left and right, look up and down, then tilt left and right.",
     minimumFrames: 54,
+    checks: ["Move slowly", "Avoid extreme turns", "Return through center", "Keep the face tracked"],
   },
   {
     id: "combo",
     title: "Expression combination",
     instruction: "Speak naturally for five seconds while making normal facial expressions.",
     minimumFrames: 90,
+    checks: ["Use normal facial motion", "Blink naturally", "Move your head lightly", "Keep tracking stable"],
   },
   {
     id: "review",
     title: "Calibration review",
     instruction: "Review quality scores and continue when the performance profile is ready.",
     minimumFrames: 0,
+    checks: ["Review weak sections", "Redo any low-quality section", "Continue when overall quality passes"],
   },
 ];
 

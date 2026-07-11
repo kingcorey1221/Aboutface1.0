@@ -1667,6 +1667,11 @@ function App() {
     setCaptureQuality({ passed: false, score: 0, messages: ["Section reset. Repeat the instruction."] });
   }, [currentCalibrationStep.id]);
 
+  const previousCalibrationPage = useCallback(() => {
+    setCalibrationIndex((current) => Math.max(0, current - 1));
+    setError(null);
+  }, []);
+
   const advanceCalibration = useCallback(() => {
     if (currentCalibrationStep.id === "review") {
       if (!calibrationProfile || calibrationProfile.quality.overall < 0.62) {
@@ -2025,44 +2030,91 @@ function App() {
               />
               <span>I consent to facial-performance tracking for this session.</span>
             </label>
-            <div className="capture-layout">
-              <div className="capture-card">
+            <div className="calibration-page">
+              <div className="calibration-page-header">
                 <span className={`status-pill ${cameraOn ? "active" : ""}`}>{cameraOn ? "Camera active" : "Camera idle"}</span>
-                <strong>{currentCalibrationStep.title}</strong>
+                <span className="step-count">Step {calibrationIndex + 1} of {CALIBRATION_STEPS.length}</span>
+                <h3>{currentCalibrationStep.title}</h3>
                 <p>{currentCalibrationStep.instruction}</p>
-                <div className="progress-track">
-                  <span style={{ width: `${currentCalibrationProgress}%` }} />
-                </div>
-                <small>
-                  {currentCalibrationCount} / {currentCalibrationStep.minimumFrames || currentCalibrationCount} stable frames
-                </small>
-                <div className="quality-list">
-                  {captureQuality.messages.map((message) => (
-                    <span key={message}>{message}</span>
-                  ))}
-                </div>
+              </div>
+
+              <div className="calibration-page-body">
+                <section className="capture-card step-task-card">
+                  <strong>{currentCalibrationStep.id === "review" ? "Review this calibration" : "Do this now"}</strong>
+                  <div className="step-checklist">
+                    {currentCalibrationStep.checks.map((check) => (
+                      <span key={check}>{check}</span>
+                    ))}
+                  </div>
+                  {currentCalibrationStep.id !== "review" && (
+                    <>
+                      <div className="progress-track">
+                        <span style={{ width: `${currentCalibrationProgress}%` }} />
+                      </div>
+                      <small>
+                        {currentCalibrationCount} / {currentCalibrationStep.minimumFrames} stable frames captured
+                      </small>
+                      <div className="quality-list">
+                        {captureQuality.messages.map((message) => (
+                          <span key={message}>{message}</span>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                  {currentCalibrationStep.id === "review" && (
+                    <div className="review-grid">
+                      <Metric label="Overall" value={calibrationProfile?.quality.overall ?? 0} />
+                      <Metric label="Neutral" value={calibrationProfile?.quality.neutral ?? 0} />
+                      <Metric label="Eyes" value={calibrationProfile?.quality.eyes ?? 0} />
+                      <Metric label="Mouth" value={calibrationProfile?.quality.mouth ?? 0} />
+                      <Metric label="Brows" value={calibrationProfile?.quality.brows ?? 0} />
+                      <Metric label="Head pose" value={calibrationProfile?.quality.headPose ?? 0} />
+                    </div>
+                  )}
+                </section>
+
+                <section className="capture-card">
+                  <strong>Live performance dashboard</strong>
+                  <Metric label="Tracking" value={captureQuality.score} />
+                  <Metric label="Left blink" value={normalizedPerformance?.eyes.leftBlink ?? 0} />
+                  <Metric label="Right blink" value={normalizedPerformance?.eyes.rightBlink ?? 0} />
+                  <Metric label="Jaw open" value={normalizedPerformance?.mouth.jawOpen ?? 0} />
+                  <Metric label="Mouth open" value={normalizedPerformance?.mouth.mouthOpen ?? 0} />
+                  <Metric label="Smile L/R" value={((normalizedPerformance?.mouth.smileLeft ?? 0) + (normalizedPerformance?.mouth.smileRight ?? 0)) / 2} />
+                  <Metric label="Brow L/R" value={((normalizedPerformance?.brows.leftOuterRaise ?? 0) + (normalizedPerformance?.brows.rightOuterRaise ?? 0)) / 2} />
+                  <Metric label="Head yaw" value={normalizedPerformance?.headPose.yaw ?? 0} />
+                  <Metric label="Head pitch" value={normalizedPerformance?.headPose.pitch ?? 0} />
+                  <Metric label="Head roll" value={normalizedPerformance?.headPose.roll ?? 0} />
+                </section>
+              </div>
+
+              <div className="calibration-page-footer">
                 <div className="button-row">
+                  <button className="button secondary" onClick={previousCalibrationPage} disabled={calibrationIndex === 0}>
+                    Back
+                  </button>
+                  <button className="button secondary" onClick={retryCalibrationSection} disabled={currentCalibrationStep.id === "review"}>
+                    Redo this page
+                  </button>
                   <button className="button secondary" onClick={restartPerformanceCapture}>
                     <RefreshCw size={17} />
                     Restart
                   </button>
-                  <button className="button secondary" onClick={retryCalibrationSection} disabled={currentCalibrationStep.id === "review"}>
-                    Redo section
+                </div>
+                <div className="button-row">
+                  <button className="button secondary" onClick={exportPerformanceDiagnostic}>
+                    Export diagnostic JSON
+                  </button>
+                  <button className="button secondary" onClick={deleteCalibration}>
+                    Delete calibration
                   </button>
                   <button className="button primary" onClick={advanceCalibration} disabled={!canAdvanceCalibration}>
-                    {currentCalibrationStep.id === "review" ? "Continue to Target Face" : "Continue"}
+                    {currentCalibrationStep.id === "review" ? "Continue to Target Face" : "Next page"}
                   </button>
                 </div>
               </div>
-              <div className="capture-card">
-                <strong>Calibration quality</strong>
-                <Metric label="Current tracking" value={captureQuality.score} />
-                <Metric label="Overall" value={calibrationProfile?.quality.overall ?? 0} />
-                <Metric label="Neutral" value={calibrationProfile?.quality.neutral ?? 0} />
-                <Metric label="Eyes" value={calibrationProfile?.quality.eyes ?? 0} />
-                <Metric label="Mouth" value={calibrationProfile?.quality.mouth ?? 0} />
-                <Metric label="Brows" value={calibrationProfile?.quality.brows ?? 0} />
-                <Metric label="Head pose" value={calibrationProfile?.quality.headPose ?? 0} />
+
+              {currentCalibrationStep.id === "review" && (
                 <label className="consent-line">
                   <input
                     type="checkbox"
@@ -2072,17 +2124,9 @@ function App() {
                   />
                   <span>Save my calibration on this device</span>
                 </label>
-                <div className="button-row">
-                  <button className="button secondary" onClick={exportPerformanceDiagnostic}>
-                    Export diagnostic JSON
-                  </button>
-                  <button className="button secondary" onClick={deleteCalibration}>
-                    Delete calibration
-                  </button>
-                </div>
+              )}
               </div>
             </div>
-          </div>
         )}
 
         {step === "upload" && (

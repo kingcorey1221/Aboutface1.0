@@ -613,6 +613,77 @@ input[type="checkbox"]:checked::before {
   gap: 12px;
 }
 
+.calibration-page {
+  display: grid;
+  gap: 16px;
+}
+
+.calibration-page-header {
+  display: grid;
+  gap: 8px;
+  padding: 16px;
+  border: 1px solid rgba(241, 210, 138, 0.14);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.calibration-page-header h3 {
+  margin: 0;
+  color: #f6e6bd;
+  font-size: 24px;
+}
+
+.calibration-page-header p {
+  margin: 0;
+  color: #d8cfb3;
+}
+
+.step-count {
+  color: #f1d28a;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.calibration-page-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(280px, 0.85fr);
+  gap: 12px;
+}
+
+.step-task-card {
+  min-height: 260px;
+  align-content: start;
+}
+
+.step-checklist {
+  display: grid;
+  gap: 8px;
+}
+
+.step-checklist span {
+  padding: 9px 10px;
+  border: 1px solid rgba(241, 210, 138, 0.12);
+  border-radius: 7px;
+  color: #eee2c2;
+  background: rgba(0, 0, 0, 0.12);
+  font-size: 13px;
+}
+
+.review-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.calibration-page-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding-top: 2px;
+}
+
 .capture-card {
   display: grid;
   gap: 10px;
@@ -750,7 +821,8 @@ input[type="checkbox"]:checked::before {
 
   .preview-grid,
   .flow-panel.horizontal,
-  .capture-layout {
+  .capture-layout,
+  .calibration-page-body {
     grid-template-columns: 1fr;
   }
 
