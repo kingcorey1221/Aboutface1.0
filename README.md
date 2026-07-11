@@ -8,6 +8,7 @@ Tagline: **Turn. Transform. Stay in control.**
 
 - React, TypeScript, Vite
 - MediaPipe Face Landmarker from local `/public/mediapipe`
+- Stage 1 facial-performance capture and calibration
 - Canvas-based mesh renderer
 - Optional FasterLivePortrait neural render backend
 - Browser `MediaDevices` camera access
@@ -64,7 +65,26 @@ Important folders:
 
 The pipeline is:
 
-`camera frame -> MediaPipe landmarks/blendshapes -> FacialPerformanceFrame -> smoothed motion -> Fast Preview mesh warp -> edge/lighting composite -> canvas output`
+`camera frame -> MediaPipe landmarks/blendshapes -> neutral/range calibration -> normalized FacialPerformanceFrame -> target renderer -> canvas output`
+
+## Two-stage Workflow
+
+Stage 1 is `Capture My Performance`. It measures the live user's facial movement for animation control only. It does not perform facial recognition, identity verification, authentication, or liveness-bypass checks.
+
+Stage 1 includes:
+
+- explicit session consent before camera capture
+- live camera preview and camera-active indicator
+- face-position and tracking-quality feedback
+- guided calibration steps for neutral face, blinks, gaze, smile, mouth/jaw, brows, head movement, and combined expression
+- robust neutral/profile calculation from multiple frames
+- movement-range calculation and zero-range-safe normalization
+- region-specific smoothed `FacialPerformanceFrame` output
+- optional encrypted local calibration save
+- delete-calibration and delete-all-data controls
+- non-image diagnostic JSON export
+
+Stage 2 is `Render My Target Face`. Target upload/rendering is locked until Stage 1 produces an acceptable calibration profile.
 
 ## What Is Fully Implemented
 
@@ -76,6 +96,8 @@ The pipeline is:
 - MediaPipe dense face landmarks.
 - MediaPipe blendshape output enabled.
 - Normalized `FacialPerformanceFrame` model for head pose, eyes, brows, mouth, cheeks, and confidence.
+- `FacialCalibrationProfile` with neutral baselines, movement ranges, and quality scores.
+- Performance-provider boundary for renderer-independent normalized motion frames.
 - Temporal smoothing control.
 - Fast Preview mesh-based target photo warping.
 - FasterLivePortrait API integration for model-backed neural render samples.
@@ -95,6 +117,7 @@ The pipeline is:
 - Head pose is estimated from landmarks, not a full calibrated camera solve.
 - Occlusion handling is limited to confidence fallback and conservative rendering.
 - Calibration currently records the user flow steps; it does not yet build a full per-user neutral baseline.
+- Android native path still needs the full Stage 1 MediaPipe inference and instrumentation parity from the web implementation.
 - Supabase Auth, private storage, encryption, and account controls are not enabled in the local personal MVP.
 - The current mesh renderer still lives mostly in `src/main.tsx`; `src/rendering/MeshPreviewRenderer.ts` is the new contract boundary for extracting it.
 

@@ -1,9 +1,10 @@
 import type { NormalizedLandmark } from "@mediapipe/tasks-vision";
 
 export type BlendMode = "normal" | "multiply" | "screen" | "overlay" | "soft-light";
-export type OverlayMode = "mesh" | "flat";
+export type OverlayMode = "swap" | "portrait" | "mesh" | "flat";
 export type AppStep =
   | "welcome"
+  | "performance"
   | "upload"
   | "camera"
   | "live"
@@ -91,12 +92,15 @@ export interface FacialPerformanceFrame {
     rightOpen: number;
     gazeX: number;
     gazeY: number;
+    leftSquint: number;
+    rightSquint: number;
   };
   brows: {
     leftOuterRaise: number;
     rightOuterRaise: number;
     innerRaise: number;
     lower: number;
+    compress: number;
   };
   mouth: {
     jawOpen: number;
@@ -122,6 +126,41 @@ export interface FacialPerformanceFrame {
 }
 
 export type FacialPerformance = FacialPerformanceFrame;
+
+export interface FacialCalibrationProfile {
+  version: number;
+  createdAt: number;
+  neutral: FacialPerformanceFrame;
+  ranges: {
+    headPitch: { min: number; max: number };
+    headYaw: { min: number; max: number };
+    headRoll: { min: number; max: number };
+    leftEyeOpen: { min: number; max: number };
+    rightEyeOpen: { min: number; max: number };
+    jawOpen: { min: number; max: number };
+    mouthOpen: { min: number; max: number };
+    smileLeft: { min: number; max: number };
+    smileRight: { min: number; max: number };
+    browLeft: { min: number; max: number };
+    browRight: { min: number; max: number };
+  };
+  quality: {
+    overall: number;
+    neutral: number;
+    eyes: number;
+    mouth: number;
+    brows: number;
+    headPose: number;
+  };
+}
+
+export interface FacialPerformanceProvider {
+  start(): Promise<void>;
+  stop(): Promise<void>;
+  recalibrate(): Promise<void>;
+  getCalibrationProfile(): FacialCalibrationProfile | null;
+  subscribe(listener: (frame: FacialPerformanceFrame) => void): () => void;
+}
 
 export interface TargetIdentity {
   id: string;

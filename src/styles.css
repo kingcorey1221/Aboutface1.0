@@ -595,6 +595,80 @@ input[type="checkbox"]:checked::before {
   background: rgba(0, 0, 0, 0.12);
 }
 
+.performance-capture-panel {
+  align-content: start;
+}
+
+.consent-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #eee2c2;
+  font-size: 13px;
+}
+
+.capture-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
+  gap: 12px;
+}
+
+.capture-card {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid rgba(241, 210, 138, 0.14);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.capture-card p {
+  margin: 0;
+  color: #d8cfb3;
+}
+
+.status-pill {
+  width: max-content;
+  padding: 4px 9px;
+  border: 1px solid rgba(241, 210, 138, 0.16);
+  border-radius: 999px;
+  color: #c9c0a4;
+  font-size: 12px;
+}
+
+.status-pill.active {
+  border-color: rgba(45, 212, 191, 0.45);
+  color: #8ff5e7;
+}
+
+.progress-track {
+  overflow: hidden;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.progress-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #2dd4bf, #f1d28a);
+}
+
+.quality-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.quality-list span {
+  padding: 5px 8px;
+  border: 1px solid rgba(241, 210, 138, 0.12);
+  border-radius: 999px;
+  color: #d8cfb3;
+  font-size: 12px;
+}
+
 .recording-panel {
   align-content: start;
 }
@@ -675,7 +749,8 @@ input[type="checkbox"]:checked::before {
   }
 
   .preview-grid,
-  .flow-panel.horizontal {
+  .flow-panel.horizontal,
+  .capture-layout {
     grid-template-columns: 1fr;
   }
 

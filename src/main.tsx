@@ -29,7 +29,9 @@ import type {
   AppStep,
   CalibrationPose,
   ConsentRecord,
+  FacialCalibrationProfile,
   FacialPerformance,
+  FacialPerformanceFrame,
   PerformanceStats,
   SessionAuditRecord,
 } from "./types";
@@ -46,8 +48,22 @@ import {
   createProvenanceMetadata,
   EXPORT_WATERMARK,
 } from "./services/recording";
+import {
+  deleteEncryptedCalibrationProfile,
+  loadEncryptedCalibrationProfile,
+  saveEncryptedCalibrationProfile,
+} from "./services/calibrationStorage";
 import { getSecureStorageStatus } from "./services/secureStorage";
 import { mapBlendshapesToPerformance, smoothPerformance } from "./tracking/BlendshapeMapper";
+import {
+  buildCalibrationProfile,
+  CALIBRATION_STEPS,
+  evaluateFrameQuality,
+  InMemoryFacialPerformanceProvider,
+  normalizePerformanceFrame,
+  type CalibrationStepId,
+  type CaptureQuality,
+} from "./tracking/FacialPerformanceCalibration";
 import { computeSafeRoll } from "./rendering/safeRoll";
 import "./styles.css";
 
@@ -968,6 +984,8 @@ function App() {
   const frameIdRef = useRef(0);
   const lastResultRef = useRef<FaceLandmarkerResult | null>(null);
   const lastPerformanceRef = useRef<FacialPerformance | null>(null);
+  const calibrationFramesRef = useRef<Partial<Record<CalibrationStepId, FacialPerformanceFrame[]>>>({});
+  const performanceProviderRef = useRef(new InMemoryFacialPerformanceProvider());
   const fpsTimesRef = useRef<number[]>([]);
   const photosRef = useRef<PhotoAsset[]>([]);
   const blendPenPointsRef = useRef<BlendPenPoint[]>([]);
@@ -989,6 +1007,16 @@ function App() {
   const [showOriginal, setShowOriginal] = useState(true);
   const [calibrationIndex, setCalibrationIndex] = useState(0);
   const [calibrationComplete, setCalibrationComplete] = useState(false);
+  const [performanceConsent, setPerformanceConsent] = useState(false);
+  const [calibrationProfile, setCalibrationProfile] = useState<FacialCalibrationProfile | null>(null);
+  const [calibrationFrames, setCalibrationFrames] = useState<Partial<Record<CalibrationStepId, number>>>({});
+  const [captureQuality, setCaptureQuality] = useState<CaptureQuality>({
+    passed: false,
+    score: 0,
+    messages: ["Camera is idle"],
+  });
+  const [normalizedPerformance, setNormalizedPerformance] = useState<FacialPerformanceFrame | null>(null);
+  const [savedCalibrationEnabled, setSavedCalibrationEnabled] = useState(false);
   const [recording, setRecording] = useState(false);
   const [recordingUrl, setRecordingUrl] = useState<string | null>(null);
   const [recordingMetadata, setRecordingMetadata] = useState<string | null>(null);
@@ -1036,6 +1064,17 @@ function App() {
         selectedPhoto.meshStatus === "ready" ? "mesh warp" : "flat fallback"
       }`
     : "No active photo";
+  const currentCalibrationStep = CALIBRATION_STEPS[calibrationIndex] ?? CALIBRATION_STEPS[0];
+  const currentCalibrationCount = calibrationFrames[currentCalibrationStep.id] ?? 0;
+  const currentCalibrationProgress =
+    currentCalibrationStep.minimumFrames === 0
+      ? 100
+      : Math.min(100, Math.round((currentCalibrationCount / currentCalibrationStep.minimumFrames) * 100));
+  const canAdvanceCalibration =
+    currentCalibrationStep.id === "review"
+      ? Boolean(calibrationProfile && calibrationProfile.quality.overall >= 0.62)
+      : currentCalibrationCount >= currentCalibrationStep.minimumFrames && captureQuality.score >= 0.62;
+  const readyToRenderTarget = calibrationComplete && Boolean(calibrationProfile);
 
   useEffect(() => {
     return () => {
@@ -1052,6 +1091,24 @@ function App() {
   useEffect(() => {
     photosRef.current = photos;
   }, [photos]);
+
+  useEffect(() => {
+    loadEncryptedCalibrationProfile().then((profile) => {
+      if (!profile) return;
+      setCalibrationProfile(profile);
+      setCalibrationComplete(true);
+      setSavedCalibrationEnabled(true);
+      performanceProviderRef.current.setCalibrationProfile(profile);
+      setStatus("Saved calibration loaded");
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!calibrationProfile || !savedCalibrationEnabled) return;
+    saveEncryptedCalibrationProfile(calibrationProfile).catch(() => {
+      setError("Could not save encrypted calibration profile on this device.");
+    });
+  }, [calibrationProfile, savedCalibrationEnabled]);
 
   useEffect(() => {
     navigator.mediaDevices
@@ -1198,6 +1255,34 @@ function App() {
       );
       lastPerformanceRef.current = smoothedPerformance;
       setFacialPerformance(smoothedPerformance);
+      const quality = evaluateFrameQuality(smoothedPerformance);
+      setCaptureQuality(quality);
+      const performanceFrame = calibrationProfile
+        ? normalizePerformanceFrame(smoothedPerformance, calibrationProfile)
+        : smoothedPerformance;
+      setNormalizedPerformance(performanceFrame);
+      performanceProviderRef.current.emit(performanceFrame);
+
+      if (
+        step === "performance" &&
+        performanceConsent &&
+        !calibrationComplete &&
+        currentCalibrationStep.id !== "review" &&
+        quality.passed
+      ) {
+        const nextFrames = [
+          ...(calibrationFramesRef.current[currentCalibrationStep.id] ?? []),
+          smoothedPerformance,
+        ].slice(-180);
+        calibrationFramesRef.current = {
+          ...calibrationFramesRef.current,
+          [currentCalibrationStep.id]: nextFrames,
+        };
+        setCalibrationFrames((current) => ({
+          ...current,
+          [currentCalibrationStep.id]: nextFrames.length,
+        }));
+      }
 
       const mappedFace = mirror
         ? face.map((point) => ({ ...point, x: 1 - point.x }))
@@ -1246,7 +1331,7 @@ function App() {
           edgeSoftness,
           lightingStrength,
           blendPenPointsRef.current,
-          smoothedPerformance,
+          normalizedPerformance ?? performanceFrame,
         );
       } else if (selectedPhoto && overlayMode === "portrait" && selectedPhoto.mesh) {
         ctx.restore();
@@ -1310,6 +1395,7 @@ function App() {
       }
     } else if (cameraOn) {
       setStatus("Searching for face");
+      setCaptureQuality(evaluateFrameQuality(null));
       if (lastPerformanceRef.current) {
         setFacialPerformance({
           ...lastPerformanceRef.current,
@@ -1339,25 +1425,35 @@ function App() {
     rafRef.current = requestAnimationFrame(drawFrame);
   }, [
     blendMode,
+    calibrationComplete,
+    calibrationProfile,
     cameraOn,
+    currentCalibrationStep.id,
     debug,
     edgeSoftness,
     hairMotionStrength,
     lightingStrength,
     mirror,
+    normalizedPerformance,
     offsetY,
     opacity,
     overlayMode,
     perfStats.inferenceMs,
+    performanceConsent,
     rotation,
     scale,
     selectedPhoto,
     smoothing,
+    step,
   ]);
 
   const startCamera = useCallback(async () => {
     try {
       setError(null);
+      if (step === "performance" && !performanceConsent) {
+        setError("Consent is required before facial-performance capture can start.");
+        return;
+      }
       await ensureLandmarker();
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
@@ -1378,7 +1474,7 @@ function App() {
         await sourcePreviewRef.current.play();
       }
       setCameraOn(true);
-      setStep((current) => (current === "camera" ? "live" : current));
+      setStep((current) => (current === "camera" && readyToRenderTarget ? "live" : current));
       setStatus("Searching for face");
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
       rafRef.current = requestAnimationFrame(drawFrame);
@@ -1388,7 +1484,7 @@ function App() {
       setCameraOn(false);
       setIsLoadingModel(false);
     }
-  }, [drawFrame, ensureLandmarker, selectedDeviceId]);
+  }, [drawFrame, ensureLandmarker, performanceConsent, readyToRenderTarget, selectedDeviceId, step]);
 
   const stopCamera = useCallback(() => {
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
@@ -1405,6 +1501,11 @@ function App() {
   const handleUpload = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files ?? []);
     if (files.length === 0) return;
+    if (!readyToRenderTarget) {
+      setError("Complete Capture My Performance before uploading a target face.");
+      event.target.value = "";
+      return;
+    }
     if (files.length > 1) {
       setError("Upload one face photo at a time for this MVP.");
       event.target.value = "";
@@ -1542,6 +1643,84 @@ function App() {
     link.click();
   }, [recordingUrl]);
 
+  const restartPerformanceCapture = useCallback(() => {
+    calibrationFramesRef.current = {};
+    performanceProviderRef.current.setCalibrationProfile(null);
+    setCalibrationFrames({});
+    setCalibrationIndex(0);
+    setCalibrationComplete(false);
+    setCalibrationProfile(null);
+    setNormalizedPerformance(null);
+    setCaptureQuality({ passed: false, score: 0, messages: ["Calibration restarted"] });
+    setStep("performance");
+  }, []);
+
+  const retryCalibrationSection = useCallback(() => {
+    calibrationFramesRef.current = {
+      ...calibrationFramesRef.current,
+      [currentCalibrationStep.id]: [],
+    };
+    setCalibrationFrames((current) => ({
+      ...current,
+      [currentCalibrationStep.id]: 0,
+    }));
+    setCaptureQuality({ passed: false, score: 0, messages: ["Section reset. Repeat the instruction."] });
+  }, [currentCalibrationStep.id]);
+
+  const advanceCalibration = useCallback(() => {
+    if (currentCalibrationStep.id === "review") {
+      if (!calibrationProfile || calibrationProfile.quality.overall < 0.62) {
+        setError("Calibration quality is too low. Redo the weak sections before continuing.");
+        return;
+      }
+      setCalibrationComplete(true);
+      setStep("upload");
+      setStatus("Ready to render target face");
+      return;
+    }
+
+    const nextIndex = calibrationIndex + 1;
+    const nextStep = CALIBRATION_STEPS[nextIndex];
+    if (nextStep?.id === "review") {
+      const profile = buildCalibrationProfile(calibrationFramesRef.current);
+      if (!profile) {
+        setError("Not enough stable calibration frames yet. Repeat the current section.");
+        return;
+      }
+      setCalibrationProfile(profile);
+      performanceProviderRef.current.setCalibrationProfile(profile);
+    }
+    setCalibrationIndex(Math.min(nextIndex, CALIBRATION_STEPS.length - 1));
+    setError(null);
+  }, [calibrationIndex, calibrationProfile, currentCalibrationStep.id]);
+
+  const deleteCalibration = useCallback(() => {
+    restartPerformanceCapture();
+    deleteEncryptedCalibrationProfile();
+    setSavedCalibrationEnabled(false);
+    setStatus("Calibration deleted");
+  }, [restartPerformanceCapture]);
+
+  const exportPerformanceDiagnostic = useCallback(() => {
+    const diagnostic = {
+      exportedAt: new Date().toISOString(),
+      currentStep: currentCalibrationStep.id,
+      quality: captureQuality,
+      calibrationProfile,
+      normalizedPerformance,
+      frameCounts: calibrationFrames,
+      performanceStats: perfStats,
+      note: "No raw camera images or raw video frames are included.",
+    };
+    const blob = new Blob([JSON.stringify(diagnostic, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `about-face-performance-diagnostic-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+  }, [calibrationFrames, calibrationProfile, captureQuality, currentCalibrationStep.id, normalizedPerformance, perfStats]);
+
   const renderNeuralSample = useCallback(async () => {
     const video = videoRef.current;
     if (!selectedPhoto || !video || !cameraOn) {
@@ -1622,6 +1801,15 @@ function App() {
     setSelectedId(null);
     setConsentRecord(null);
     setSessionAudit(null);
+    calibrationFramesRef.current = {};
+    performanceProviderRef.current.setCalibrationProfile(null);
+    setCalibrationFrames({});
+    setCalibrationProfile(null);
+    setCalibrationComplete(false);
+    setNormalizedPerformance(null);
+    setPerformanceConsent(false);
+    setSavedCalibrationEnabled(false);
+    deleteEncryptedCalibrationProfile();
     deleteAllLocalData();
     setStatus("Local data deleted");
     setStep("welcome");
@@ -1721,13 +1909,13 @@ function App() {
               <p>Turn. Transform. Stay in control.</p>
             </div>
           </div>
-          <h2>Animate a face photo with your own facial movement.</h2>
+          <h2>Capture your facial performance before rendering a target face.</h2>
           <p>
-            Upload a face, start the camera, and use Face swap for a live replacement preview or Neural render for
-            model-backed output when the local backend is running.
+            About Face first measures how your face moves, builds a neutral baseline, and normalizes your expressions.
+            The renderer uses that motion profile instead of raw camera landmarks.
           </p>
-          <button className="button primary hero-action" onClick={() => setStep("upload")}>
-            Create an Avatar
+          <button className="button primary hero-action" onClick={() => setStep("performance")}>
+            Capture My Performance
           </button>
         </section>
       </main>
@@ -1746,14 +1934,17 @@ function App() {
         </div>
 
         <nav className="step-nav">
-          {(["upload", "camera", "live", "recording", "privacy"] as AppStep[]).map((item) => (
+          {(["performance", "upload", "camera", "live", "recording", "privacy"] as AppStep[]).map((item) => (
             <button
               key={item}
               className={step === item ? "active" : ""}
               onClick={() => setStep(item)}
-              disabled={item !== "upload" && photos.length === 0}
+              disabled={
+                (["upload", "camera", "live", "recording"] as AppStep[]).includes(item) &&
+                (!readyToRenderTarget || (item !== "upload" && photos.length === 0))
+              }
             >
-              {item}
+              {item === "performance" ? "performance" : item}
             </button>
           ))}
         </nav>
@@ -1763,8 +1954,8 @@ function App() {
           <label className="upload-drop">
             <ImagePlus size={20} />
             <span>Upload face photo</span>
-            <small>JPG, PNG, WebP. One clear front-facing face.</small>
-            <input type="file" accept="image/jpeg,image/png,image/webp" onChange={handleUpload} />
+            <small>{readyToRenderTarget ? "JPG, PNG, WebP. One clear front-facing face." : "Complete Capture My Performance first."}</small>
+            <input type="file" accept="image/jpeg,image/png,image/webp" onChange={handleUpload} disabled={!readyToRenderTarget} />
           </label>
         </section>
 
@@ -1793,6 +1984,7 @@ function App() {
         <header className="stage-header">
           <div>
             <h2>
+              {step === "performance" && "Capture My Performance"}
               {step === "upload" && "Upload a face"}
               {step === "camera" && "Camera setup and calibration"}
               {step === "live" && "Live transformation"}
@@ -1805,7 +1997,7 @@ function App() {
             {cameraOn ? (
               <button className="button secondary" onClick={stopCamera}><CameraOff size={18} />Stop</button>
             ) : (
-              <button className="button primary" onClick={startCamera} disabled={isLoadingModel || photos.length === 0}>
+              <button className="button primary" onClick={startCamera} disabled={isLoadingModel || (step !== "performance" && photos.length === 0)}>
                 <Camera size={18} />{isLoadingModel ? "Loading" : "Start camera"}
               </button>
             )}
@@ -1815,6 +2007,83 @@ function App() {
             </button>
           </div>
         </header>
+
+        {step === "performance" && (
+          <div className="flow-panel performance-capture-panel">
+            <div className="notice">
+              <Info size={18} />
+              <span>
+                About Face measures how your face moves so it can transfer your expressions to your selected target face.
+                This process does not identify you or verify your identity.
+              </span>
+            </div>
+            <label className="consent-line">
+              <input
+                type="checkbox"
+                checked={performanceConsent}
+                onChange={(event) => setPerformanceConsent(event.target.checked)}
+              />
+              <span>I consent to facial-performance tracking for this session.</span>
+            </label>
+            <div className="capture-layout">
+              <div className="capture-card">
+                <span className={`status-pill ${cameraOn ? "active" : ""}`}>{cameraOn ? "Camera active" : "Camera idle"}</span>
+                <strong>{currentCalibrationStep.title}</strong>
+                <p>{currentCalibrationStep.instruction}</p>
+                <div className="progress-track">
+                  <span style={{ width: `${currentCalibrationProgress}%` }} />
+                </div>
+                <small>
+                  {currentCalibrationCount} / {currentCalibrationStep.minimumFrames || currentCalibrationCount} stable frames
+                </small>
+                <div className="quality-list">
+                  {captureQuality.messages.map((message) => (
+                    <span key={message}>{message}</span>
+                  ))}
+                </div>
+                <div className="button-row">
+                  <button className="button secondary" onClick={restartPerformanceCapture}>
+                    <RefreshCw size={17} />
+                    Restart
+                  </button>
+                  <button className="button secondary" onClick={retryCalibrationSection} disabled={currentCalibrationStep.id === "review"}>
+                    Redo section
+                  </button>
+                  <button className="button primary" onClick={advanceCalibration} disabled={!canAdvanceCalibration}>
+                    {currentCalibrationStep.id === "review" ? "Continue to Target Face" : "Continue"}
+                  </button>
+                </div>
+              </div>
+              <div className="capture-card">
+                <strong>Calibration quality</strong>
+                <Metric label="Current tracking" value={captureQuality.score} />
+                <Metric label="Overall" value={calibrationProfile?.quality.overall ?? 0} />
+                <Metric label="Neutral" value={calibrationProfile?.quality.neutral ?? 0} />
+                <Metric label="Eyes" value={calibrationProfile?.quality.eyes ?? 0} />
+                <Metric label="Mouth" value={calibrationProfile?.quality.mouth ?? 0} />
+                <Metric label="Brows" value={calibrationProfile?.quality.brows ?? 0} />
+                <Metric label="Head pose" value={calibrationProfile?.quality.headPose ?? 0} />
+                <label className="consent-line">
+                  <input
+                    type="checkbox"
+                    checked={savedCalibrationEnabled}
+                    onChange={(event) => setSavedCalibrationEnabled(event.target.checked)}
+                    disabled={!calibrationProfile}
+                  />
+                  <span>Save my calibration on this device</span>
+                </label>
+                <div className="button-row">
+                  <button className="button secondary" onClick={exportPerformanceDiagnostic}>
+                    Export diagnostic JSON
+                  </button>
+                  <button className="button secondary" onClick={deleteCalibration}>
+                    Delete calibration
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {step === "upload" && (
           <div className="flow-panel">

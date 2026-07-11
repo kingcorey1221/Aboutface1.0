@@ -64,12 +64,15 @@ export function mapBlendshapesToPerformance(
       rightOpen: clamp01(1 - rightBlink),
       gazeX: score(categories, "eyeLookOutLeft") - score(categories, "eyeLookOutRight"),
       gazeY: score(categories, "eyeLookUpLeft") - score(categories, "eyeLookDownLeft"),
+      leftSquint: score(categories, "eyeSquintLeft"),
+      rightSquint: score(categories, "eyeSquintRight"),
     },
     brows: {
       leftOuterRaise: score(categories, "browOuterUpLeft"),
       rightOuterRaise: score(categories, "browOuterUpRight"),
       innerRaise: score(categories, "browInnerUp"),
       lower: Math.max(score(categories, "browDownLeft"), score(categories, "browDownRight")),
+      compress: Math.max(score(categories, "browDownLeft"), score(categories, "browDownRight")),
     },
     mouth: {
       jawOpen: score(categories, "jawOpen"),
@@ -121,12 +124,15 @@ export function smoothPerformance(
       rightOpen: mix(previous.eyes.rightOpen, next.eyes.rightOpen),
       gazeX: mix(previous.eyes.gazeX, next.eyes.gazeX),
       gazeY: mix(previous.eyes.gazeY, next.eyes.gazeY),
+      leftSquint: mix(previous.eyes.leftSquint, next.eyes.leftSquint),
+      rightSquint: mix(previous.eyes.rightSquint, next.eyes.rightSquint),
     },
     brows: {
       leftOuterRaise: mix(previous.brows.leftOuterRaise, next.brows.leftOuterRaise),
       rightOuterRaise: mix(previous.brows.rightOuterRaise, next.brows.rightOuterRaise),
       innerRaise: mix(previous.brows.innerRaise, next.brows.innerRaise),
       lower: mix(previous.brows.lower, next.brows.lower),
+      compress: mix(previous.brows.compress, next.brows.compress),
     },
     mouth: {
       jawOpen: mix(previous.mouth.jawOpen, next.mouth.jawOpen),

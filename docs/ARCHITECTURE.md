@@ -30,6 +30,8 @@ flowchart TD
 - MediaPipe Face Landmarker tracking.
 - Dense landmarks.
 - Blendshape mapping to `FacialPerformanceFrame`.
+- Capture My Performance stage with session consent, guided calibration, neutral profile, movement ranges, quality scores, and normalized output.
+- `FacialCalibrationProfile` and `FacialPerformanceProvider` models.
 - Basic upload and target mesh preparation.
 - Fast Preview canvas renderer.
 - FasterLivePortrait API integration for neural render samples.
@@ -42,7 +44,7 @@ flowchart TD
 
 ## Prototype Quality
 
-- Driver calibration UI exists but does not yet compute a full baseline profile.
+- Web driver calibration computes a session calibration profile from multiple frames; Android still needs native parity.
 - Smoothing is not yet region-specific in the live loop.
 - Target identity preparation does not yet include masks, depth, canonical pose, or embeddings.
 - Mesh and locked-portrait previews still render in `main.tsx`.
